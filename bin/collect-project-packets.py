@@ -23,6 +23,9 @@ USER_CORRECTION_RE = re.compile(
 )
 FAILURE_RE = re.compile(r"(fail|failed|failure|error|exit code [1-9]|not ok|fatal|exception)", re.IGNORECASE)
 SUCCESS_RE = re.compile(r"(success|successful|passed|passing|ok|no errors|0 failures|0 errors)", re.IGNORECASE)
+UUID_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.IGNORECASE)
+UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){0,3}(?:-[0-9a-f]{0,12})?$", re.IGNORECASE)
+LATEST_RE = re.compile(r"^latest:(\d+)$", re.IGNORECASE)
 
 
 def expand_home(path):
@@ -303,7 +306,15 @@ def message_has_user_text(content):
     return False
 
 
-def inspect_session(path, targets):
+def session_id_matches(value, wanted):
+    if not wanted:
+        return True
+    value = str(value or "")
+    wanted = str(wanted)
+    return value == wanted or value.startswith(wanted)
+
+
+def inspect_session(path, targets, session_id_filter=None):
     session_id = os.path.splitext(os.path.basename(path))[0]
     matched_cwd = None
     first_ts = None
@@ -320,9 +331,13 @@ def inspect_session(path, targets):
             if first_ts is None:
                 first_ts = entry.get("timestamp")
             last_ts = entry.get("timestamp")
-        if isinstance(entry.get("cwd"), str) and cwd_matches(entry.get("cwd"), targets):
-            if matched_cwd is None:
-                matched_cwd = entry.get("cwd")
+        if isinstance(entry.get("cwd"), str):
+            if targets is None:
+                if matched_cwd is None:
+                    matched_cwd = entry.get("cwd")
+            elif cwd_matches(entry.get("cwd"), targets):
+                if matched_cwd is None:
+                    matched_cwd = entry.get("cwd")
 
         msg_type = entry.get("type")
         content = entry.get("message", {}).get("content")
@@ -340,6 +355,8 @@ def inspect_session(path, targets):
                     if name in ("Agent", "Task"):
                         agent_calls += 1
 
+    if session_id_filter and not session_id_matches(session_id, session_id_filter):
+        return None
     if matched_cwd is None:
         return None
 
@@ -537,6 +554,171 @@ def summarize_session(meta):
     }
 
 
+def extract_subagent_role(entries, fallback):
+    for entry in entries:
+        if entry.get("type") != "user":
+            continue
+        text = text_from_content(entry.get("message", {}).get("content"))
+        if not text.strip():
+            continue
+        match = re.search(r"「([^」]{1,80})」というメンバー", text)
+        if match:
+            return clip_text(match.group(1), 80)
+        match = re.search(r"member(?:\s+name)?\s*[:=]\s*([A-Za-z0-9_.-]{1,80})", text, re.IGNORECASE)
+        if match:
+            return clip_text(match.group(1), 80)
+        match = re.search(r"role\s*[:=]\s*([A-Za-z0-9_.-]{1,80})", text, re.IGNORECASE)
+        if match:
+            return clip_text(match.group(1), 80)
+        break
+    return fallback
+
+
+def summarize_transcript_entries(entries, seen_tool_uses=None, seen_tool_results=None):
+    if seen_tool_uses is None:
+        seen_tool_uses = set()
+    if seen_tool_results is None:
+        seen_tool_results = set()
+    tools = {}
+    errors = 0
+    interrupted = False
+    verification_count = 0
+    verification_success_count = 0
+    verification_failure_count = 0
+    verification_unknown_count = 0
+    send_message_count = 0
+    pending_tools = {}
+
+    for entry in entries:
+        content = entry.get("message", {}).get("content")
+        if entry.get("type") == "assistant" and isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name = str(block.get("name", "unknown"))
+                tool_id = block.get("id")
+                if isinstance(tool_id, str):
+                    if tool_id in seen_tool_uses:
+                        continue
+                    seen_tool_uses.add(tool_id)
+                tools[name] = tools.get(name, 0) + 1
+                if name == "SendMessage":
+                    send_message_count += 1
+                input_data = block.get("input")
+                if isinstance(input_data, dict):
+                    command = input_data.get("command")
+                    if isinstance(tool_id, str):
+                        pending_tools[tool_id] = {
+                            "name": name,
+                            "command": command if isinstance(command, str) else "",
+                        }
+                    if isinstance(command, str) and is_verification_command(command):
+                        verification_count += 1
+
+        if entry.get("type") == "user" and isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_result":
+                    is_error = block.get("is_error") is True
+                    tool_id = block.get("tool_use_id")
+                    if isinstance(tool_id, str):
+                        if tool_id in seen_tool_results:
+                            continue
+                        seen_tool_results.add(tool_id)
+                    if is_error:
+                        errors += 1
+                    tool_meta = pending_tools.get(tool_id) if isinstance(tool_id, str) else None
+                    if tool_meta and is_verification_command(tool_meta.get("command", "")):
+                        result = classify_verification_result(text_from_content(block.get("content", "")), is_error)
+                        if result == "success":
+                            verification_success_count += 1
+                        elif result == "failure":
+                            verification_failure_count += 1
+                        else:
+                            verification_unknown_count += 1
+                if block.get("type") == "text" and "[Request interrupted by user" in str(block.get("text", "")):
+                    interrupted = True
+        elif entry.get("type") == "user" and isinstance(content, str):
+            if "[Request interrupted by user" in content:
+                interrupted = True
+
+    durations = duration_metrics(entries)
+    return {
+        "tools": sort_counts(tools),
+        "error_count": errors,
+        "interrupted": interrupted,
+        "verification_count": verification_count,
+        "verification_success_count": verification_success_count,
+        "verification_failure_count": verification_failure_count,
+        "verification_unknown_count": verification_unknown_count,
+        "send_message_count": send_message_count,
+        "wall_duration_minutes": durations["wall_duration_minutes"],
+        "active_duration_minutes": durations["active_duration_minutes"],
+    }
+
+
+def summarize_subagents(meta):
+    totals = {
+        "transcript_count": 0,
+        "error_count": 0,
+        "interrupted_count": 0,
+        "verification_count": 0,
+        "verification_success_count": 0,
+        "verification_failure_count": 0,
+        "verification_unknown_count": 0,
+        "send_message_count": 0,
+        "active_duration_minutes": 0,
+    }
+    by_role = {}
+    seen_tool_uses = set()
+    seen_tool_results = set()
+    for agent_file in discover_subagent_files(meta["file"], meta["session_id"]):
+        entries = read_jsonl_lenient(agent_file)
+        if not entries:
+            continue
+        fallback = os.path.splitext(os.path.basename(agent_file))[0]
+        role = extract_subagent_role(entries, fallback)
+        stats = summarize_transcript_entries(entries, seen_tool_uses, seen_tool_results)
+        role_stats = by_role.setdefault(role, {
+            "transcript_count": 0,
+            "error_count": 0,
+            "interrupted_count": 0,
+            "verification_count": 0,
+            "verification_success_count": 0,
+            "verification_failure_count": 0,
+            "verification_unknown_count": 0,
+            "send_message_count": 0,
+            "active_duration_minutes": 0,
+            "top_tools": {},
+        })
+        role_stats["transcript_count"] += 1
+        role_stats["error_count"] += stats["error_count"]
+        role_stats["interrupted_count"] += 1 if stats["interrupted"] else 0
+        role_stats["verification_count"] += stats["verification_count"]
+        role_stats["verification_success_count"] += stats["verification_success_count"]
+        role_stats["verification_failure_count"] += stats["verification_failure_count"]
+        role_stats["verification_unknown_count"] += stats["verification_unknown_count"]
+        role_stats["send_message_count"] += stats["send_message_count"]
+        role_stats["active_duration_minutes"] += stats["active_duration_minutes"]
+        for name, count in stats["tools"].items():
+            role_stats["top_tools"][name] = role_stats["top_tools"].get(name, 0) + count
+
+        totals["transcript_count"] += 1
+        totals["error_count"] += stats["error_count"]
+        totals["interrupted_count"] += 1 if stats["interrupted"] else 0
+        totals["verification_count"] += stats["verification_count"]
+        totals["verification_success_count"] += stats["verification_success_count"]
+        totals["verification_failure_count"] += stats["verification_failure_count"]
+        totals["verification_unknown_count"] += stats["verification_unknown_count"]
+        totals["send_message_count"] += stats["send_message_count"]
+        totals["active_duration_minutes"] += stats["active_duration_minutes"]
+
+    for role in list(by_role.keys()):
+        by_role[role]["top_tools"] = dict(list(sort_counts(by_role[role]["top_tools"]).items())[:8])
+    return {"totals": totals, "by_role": by_role}
+
+
 def run_packet_builder(session_file, args):
     builder = os.path.join(os.path.dirname(__file__), "build-session-packet.py")
     cmd = [
@@ -584,6 +766,7 @@ def parse_args(argv):
     default_home = os.path.join(os.environ.get("HOME", ""), ".claude") if os.environ.get("HOME") else ".claude"
     parser.add_argument("--out", default=None, help="Output run directory. Default: data/runs/<timestamp>")
     parser.add_argument("--limit", type=int, default=30, help="Maximum matching sessions to packetize. Default: 30")
+    parser.add_argument("--session-id", default="", help="Select one session by full UUID or unique prefix.")
     parser.add_argument("--claude-home", default=default_home, help="Claude config dir. Default: ~/.claude")
     parser.add_argument("--exclude-noop", action="store_true", help="Do not packetize no-op sessions.")
     parser.add_argument("--include-noop", action="store_true", help="Packetize no-op sessions. This is the default.")
@@ -594,10 +777,23 @@ def parse_args(argv):
     parser.add_argument("--max-agents", type=int, default=0, help="Maximum subagents per packet; 0 means all.")
     parser.add_argument("--max-files", type=int, default=30, help="Maximum files listed per packet section.")
     parser.add_argument("--max-commands", type=int, default=20, help="Maximum commands listed per packet section.")
-    parser.add_argument("patterns", nargs="+", help="cwd patterns")
+    parser.add_argument("patterns", nargs="*", help="cwd patterns, optionally followed by latest:N")
     args = parser.parse_args(argv[1:])
+    patterns = []
+    for token in args.patterns:
+        latest_match = LATEST_RE.match(token)
+        if latest_match:
+            args.limit = int(latest_match.group(1))
+            continue
+        if not args.session_id and UUID_PREFIX_RE.match(token):
+            args.session_id = token
+            continue
+        patterns.append(token)
+    args.patterns = patterns
     if args.limit < 1:
         args.limit = 1
+    if not args.patterns and not args.session_id:
+        parser.error("a cwd pattern or --session-id is required")
     if args.out is None:
         args.out = os.path.join(repo_root, "data", "runs", datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
     return args
@@ -635,14 +831,14 @@ def recommended_packets(sessions):
         and "error-heavy" not in session.get("report_flags", [])
         and "edit-heavy" not in session.get("report_flags", [])
     ]
-    representative.sort(key=lambda session: (-session.get("verification_count", 0), session.get("started", "")))
+    representative.sort(key=lambda session: (-session.get("combined_verification_count", session.get("verification_count", 0)), session.get("started", "")))
     noop = [session for session in sessions if session.get("signal_class") == "no-op"]
     noop.sort(key=lambda session: session.get("started", ""), reverse=True)
     return {
         "agent_heavy": sessions_with_flag(sessions, "agent-heavy", 3),
         "error_heavy": sessions_with_flag(sessions, "error-heavy", 3),
         "edit_heavy": top_sessions(sessions, "edit_write_count", 3),
-        "verification_heavy": top_sessions(sessions, "verification_count", 3),
+        "verification_heavy": top_sessions(sessions, "combined_verification_count", 3),
         "interrupted": sessions_with_flag(sessions, "interrupted", 3),
         "representative": [session["session"] for session in representative[:3]],
         "noop_examples": [session["session"] for session in noop[:2]],
@@ -655,17 +851,32 @@ def main(argv):
     packet_dir = os.path.join(out_dir, "packets")
     ensure_dir(packet_dir)
 
-    targets = compile_targets(args.patterns)
+    targets = compile_targets(args.patterns) if args.patterns else None
     matches = []
     for session_file in find_parent_session_files(args.claude_home):
-        meta = inspect_session(session_file, targets)
+        meta = inspect_session(session_file, targets, args.session_id)
         if meta is not None:
             matches.append(meta)
     matches.sort(key=lambda item: item.get("mtime", 0), reverse=True)
+    if args.session_id and len(matches) > 1:
+        full_matches = [match for match in matches if match["session_id"] == args.session_id]
+        if len(full_matches) == 1:
+            matches = full_matches
+        elif len(matches) > 1 and not UUID_RE.match(args.session_id):
+            sys.stderr.write("error: session id prefix matched multiple sessions:\n")
+            for match in matches[:20]:
+                sys.stderr.write("  %s  %s\n" % (match["session_id"], match["file"]))
+            return 2
     selected_items = []
     filtered_out = 0
     for meta in matches:
         summary = summarize_session(meta)
+        summary["subagents"] = summarize_subagents(meta)
+        subagent_totals = summary["subagents"]["totals"]
+        if subagent_totals["verification_count"] >= 3 and "verification-heavy" not in summary["report_flags"]:
+            summary["report_flags"].append("verification-heavy")
+        if subagent_totals["error_count"] >= 2 and "error-heavy" not in summary["report_flags"]:
+            summary["report_flags"].append("error-heavy")
         if not session_passes_filters(meta, summary, args):
             filtered_out += 1
             continue
@@ -686,16 +897,30 @@ def main(argv):
         "verification_success_count": 0,
         "verification_failure_count": 0,
         "verification_unknown_count": 0,
+        "subagent_verification_count": 0,
+        "subagent_verification_success_count": 0,
+        "subagent_verification_failure_count": 0,
+        "subagent_verification_unknown_count": 0,
+        "combined_verification_count": 0,
+        "combined_verification_success_count": 0,
+        "combined_verification_failure_count": 0,
+        "combined_verification_unknown_count": 0,
         "error_count": 0,
+        "subagent_error_count": 0,
+        "combined_error_count": 0,
         "interrupted": 0,
+        "subagent_interrupted_count": 0,
         "raw_subagent_transcript_count": 0,
         "logical_subagent_role_count": 0,
+        "subagent_send_message_count": 0,
         "user_correction_count": 0,
         "active_duration_minutes": 0,
+        "subagent_active_duration_minutes": 0,
         "large_idle_gap_count": 0,
     }
     aggregate_kinds = {}
     aggregate_files = {}
+    aggregate_subagent_roles = {}
 
     for item in selected_items:
         meta = item["meta"]
@@ -707,6 +932,7 @@ def main(argv):
 
         index_rows.append({"short_id": short_id, "packet": packet_path, "meta": meta, "summary": summary})
         agent_calls = summary["tools"].get("Agent", 0) + summary["tools"].get("Task", 0)
+        subagent_totals = summary["subagents"]["totals"]
         aggregate_session = {
             "session": short_id,
             "session_id": meta["session_id"],
@@ -726,11 +952,24 @@ def main(argv):
             "verification_success_count": summary["verification_success_count"],
             "verification_failure_count": summary["verification_failure_count"],
             "verification_unknown_count": summary["verification_unknown_count"],
+            "subagent_verification_count": subagent_totals["verification_count"],
+            "subagent_verification_success_count": subagent_totals["verification_success_count"],
+            "subagent_verification_failure_count": subagent_totals["verification_failure_count"],
+            "subagent_verification_unknown_count": subagent_totals["verification_unknown_count"],
+            "combined_verification_count": summary["verification_count"] + subagent_totals["verification_count"],
+            "combined_verification_success_count": summary["verification_success_count"] + subagent_totals["verification_success_count"],
+            "combined_verification_failure_count": summary["verification_failure_count"] + subagent_totals["verification_failure_count"],
+            "combined_verification_unknown_count": summary["verification_unknown_count"] + subagent_totals["verification_unknown_count"],
             "error_count": summary["error_count"],
+            "subagent_error_count": subagent_totals["error_count"],
+            "combined_error_count": summary["error_count"] + subagent_totals["error_count"],
             "interrupted": summary["interrupted"],
+            "subagent_interrupted_count": subagent_totals["interrupted_count"],
             "raw_subagent_transcript_count": summary["raw_subagent_transcript_count"],
             "logical_subagent_role_count": summary["logical_subagent_role_count"],
             "logical_subagent_roles": summary["logical_subagent_roles"],
+            "subagent_role_stats": summary["subagents"]["by_role"],
+            "subagent_send_message_count": subagent_totals["send_message_count"],
             "report_flags": summary["report_flags"],
             "user_correction_count": summary["user_correction_count"],
             "wall_duration_minutes": summary["wall_duration_minutes"],
@@ -750,16 +989,42 @@ def main(argv):
         aggregate_totals["verification_success_count"] += summary["verification_success_count"]
         aggregate_totals["verification_failure_count"] += summary["verification_failure_count"]
         aggregate_totals["verification_unknown_count"] += summary["verification_unknown_count"]
+        aggregate_totals["subagent_verification_count"] += subagent_totals["verification_count"]
+        aggregate_totals["subagent_verification_success_count"] += subagent_totals["verification_success_count"]
+        aggregate_totals["subagent_verification_failure_count"] += subagent_totals["verification_failure_count"]
+        aggregate_totals["subagent_verification_unknown_count"] += subagent_totals["verification_unknown_count"]
+        aggregate_totals["combined_verification_count"] += summary["verification_count"] + subagent_totals["verification_count"]
+        aggregate_totals["combined_verification_success_count"] += summary["verification_success_count"] + subagent_totals["verification_success_count"]
+        aggregate_totals["combined_verification_failure_count"] += summary["verification_failure_count"] + subagent_totals["verification_failure_count"]
+        aggregate_totals["combined_verification_unknown_count"] += summary["verification_unknown_count"] + subagent_totals["verification_unknown_count"]
         aggregate_totals["error_count"] += summary["error_count"]
+        aggregate_totals["subagent_error_count"] += subagent_totals["error_count"]
+        aggregate_totals["combined_error_count"] += summary["error_count"] + subagent_totals["error_count"]
         aggregate_totals["interrupted"] += 1 if summary["interrupted"] else 0
+        aggregate_totals["subagent_interrupted_count"] += subagent_totals["interrupted_count"]
         aggregate_totals["raw_subagent_transcript_count"] += summary["raw_subagent_transcript_count"]
         aggregate_totals["logical_subagent_role_count"] += summary["logical_subagent_role_count"]
+        aggregate_totals["subagent_send_message_count"] += subagent_totals["send_message_count"]
         aggregate_totals["user_correction_count"] += summary["user_correction_count"]
         aggregate_totals["active_duration_minutes"] += summary["active_duration_minutes"]
+        aggregate_totals["subagent_active_duration_minutes"] += subagent_totals["active_duration_minutes"]
         aggregate_totals["large_idle_gap_count"] += summary["large_idle_gap_count"]
         aggregate_kinds[summary["session_kind"]] = aggregate_kinds.get(summary["session_kind"], 0) + 1
         for file_path, count in summary["top_files"].items():
             aggregate_files[file_path] = aggregate_files.get(file_path, 0) + count
+        for role, role_stats in summary["subagents"]["by_role"].items():
+            existing = aggregate_subagent_roles.setdefault(role, {
+                "transcript_count": 0,
+                "error_count": 0,
+                "verification_count": 0,
+                "verification_success_count": 0,
+                "verification_failure_count": 0,
+                "verification_unknown_count": 0,
+                "send_message_count": 0,
+                "active_duration_minutes": 0,
+            })
+            for key in existing:
+                existing[key] += role_stats.get(key, 0)
 
         next_sessions.append({
             "session": short_id,
@@ -777,14 +1042,20 @@ def main(argv):
 
     aggregate_kinds = sort_counts(aggregate_kinds)
     aggregate_files = sort_counts(aggregate_files)
+    aggregate_subagent_roles = dict(sorted(
+        aggregate_subagent_roles.items(),
+        key=lambda item: (-item[1]["transcript_count"], item[0]),
+    ))
     packet_recommendations = recommended_packets(aggregate_sessions)
 
     index = []
     index.append("# Claude Insights Run Index\n")
     index.append("Read this index first. Open individual packet files only when needed for the final report.\n")
     index.append("## Scope\n")
-    index.append("- Patterns: `%s`" % "`, `".join(args.patterns))
-    index.append("- Expanded directories: %s" % ("none" if len(targets["dirs"]) == 0 else len(targets["dirs"])))
+    index.append("- Patterns: `%s`" % ("`, `".join(args.patterns) if args.patterns else "none"))
+    if args.session_id:
+        index.append("- Session ID filter: `%s`" % args.session_id)
+    index.append("- Expanded directories: %s" % ("none" if targets is None or len(targets["dirs"]) == 0 else len(targets["dirs"])))
     index.append("- Matching sessions found: %s" % len(matches))
     index.append("- Sessions packetized: %s" % len(selected_items))
     if filtered_out:
@@ -800,19 +1071,49 @@ def main(argv):
         aggregate_totals["no_op"],
     ))
     index.append("- Edit/write count: %s" % aggregate_totals["edit_write_count"])
-    index.append("- Verification count: %s (success %s, failure %s, unknown %s)" % (
+    index.append("- Main verification count: %s (success %s, failure %s, unknown %s)" % (
         aggregate_totals["verification_count"],
         aggregate_totals["verification_success_count"],
         aggregate_totals["verification_failure_count"],
         aggregate_totals["verification_unknown_count"],
     ))
-    index.append("- Error count: %s" % aggregate_totals["error_count"])
+    index.append("- Subagent verification count: %s (success %s, failure %s, unknown %s)" % (
+        aggregate_totals["subagent_verification_count"],
+        aggregate_totals["subagent_verification_success_count"],
+        aggregate_totals["subagent_verification_failure_count"],
+        aggregate_totals["subagent_verification_unknown_count"],
+    ))
+    index.append("- Combined verification count: %s (success %s, failure %s, unknown %s)" % (
+        aggregate_totals["combined_verification_count"],
+        aggregate_totals["combined_verification_success_count"],
+        aggregate_totals["combined_verification_failure_count"],
+        aggregate_totals["combined_verification_unknown_count"],
+    ))
+    index.append("- Main error count: %s" % aggregate_totals["error_count"])
+    index.append("- Subagent error count: %s" % aggregate_totals["subagent_error_count"])
+    index.append("- Combined error count: %s" % aggregate_totals["combined_error_count"])
     index.append("- Interrupted sessions: %s" % aggregate_totals["interrupted"])
+    index.append("- Subagent interruptions: %s" % aggregate_totals["subagent_interrupted_count"])
     index.append("- User correction signals: %s" % aggregate_totals["user_correction_count"])
     index.append("- Active duration minutes: %s" % aggregate_totals["active_duration_minutes"])
     index.append("- Raw subagent transcripts: %s" % aggregate_totals["raw_subagent_transcript_count"])
     index.append("- Logical subagent roles: %s" % aggregate_totals["logical_subagent_role_count"])
+    index.append("- Subagent SendMessage count: %s" % aggregate_totals["subagent_send_message_count"])
     index.append("- Top files: %s\n" % format_counts(dict(list(aggregate_files.items())[:8])))
+    if aggregate_subagent_roles:
+        index.append("## Subagent Role Stats\n")
+        index.append("| Role | Transcripts | Verify | Errors | SendMessage | Active min |")
+        index.append("|---|---:|---:|---:|---:|---:|")
+        for role, stats in list(aggregate_subagent_roles.items())[:20]:
+            index.append("| %s | %s | %s | %s | %s | %s |" % (
+                md_cell(role),
+                stats["transcript_count"],
+                stats["verification_count"],
+                stats["error_count"],
+                stats["send_message_count"],
+                stats["active_duration_minutes"],
+            ))
+        index.append("")
     index.append("## Recommended Packets\n")
     for name, sessions in packet_recommendations.items():
         index.append("- %s: %s" % (name, ", ".join("`%s`" % session for session in sessions) if sessions else "none"))
@@ -822,7 +1123,7 @@ def main(argv):
     if not index_rows:
         index.append("_No matching sessions found._")
     else:
-        index.append("| Session | Started | Kind | Signal | Flags | First intent | Edit/write | Verify | Errors | Interrupted | Raw subagents | Logical roles | Active min | Top files | Packet |")
+        index.append("| Session | Started | Kind | Signal | Flags | First intent | Edit/write | Verify main/sub | Errors main/sub | Interrupted | Raw subagents | Logical roles | Active min | Top files | Packet |")
         index.append("|---|---:|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---|---|")
         for row in index_rows:
             meta = row["meta"]
@@ -840,8 +1141,8 @@ def main(argv):
                 md_cell(", ".join(summary["report_flags"]) if summary["report_flags"] else "none"),
                 md_cell(summary["first_intent"]),
                 summary["edit_write_count"],
-                summary["verification_count"],
-                summary["error_count"],
+                "%s/%s" % (summary["verification_count"], summary["subagents"]["totals"]["verification_count"]),
+                "%s/%s" % (summary["error_count"], summary["subagents"]["totals"]["error_count"]),
                 interrupted,
                 summary["raw_subagent_transcript_count"],
                 summary["logical_subagent_role_count"],
@@ -853,6 +1154,7 @@ def main(argv):
     index.append("\n## Report Guidance\n")
     index.append("- Start from `aggregate.json` and this index before opening packets.")
     index.append("- Treat `raw_subagent_transcript_count` as storage/transcript count and `logical_subagent_role_count` as the distinct delegated role labels observed in parent tool calls.")
+    index.append("- Treat subagent tool counts as de-duplicated by tool_use ID; subagent active minutes are cumulative transcript time and can still include repeated context from resumed agents.")
     index.append("- Prefer substantive sessions for first-pass packet reading; sample no-op or low-signal sessions only when explaining noise or interruptions.")
     index.append("- Analyze main-session coordination separately from subagent activity.")
     index.append("- Report delegation patterns, friction, useful agent workflows, and missed opportunities.")
@@ -866,7 +1168,8 @@ def main(argv):
         "index": os.path.join(out_dir, "index.md"),
         "output_dir": out_dir,
         "patterns": args.patterns,
-        "expanded_directory_count": len(targets["dirs"]),
+        "session_id_filter": args.session_id,
+        "expanded_directory_count": 0 if targets is None else len(targets["dirs"]),
         "matching_session_count": len(matches),
         "packet_count": len(selected_items),
         "filtered_out_count": filtered_out,
@@ -885,6 +1188,7 @@ def main(argv):
         "totals": aggregate_totals,
         "session_kinds": aggregate_kinds,
         "top_files": dict(list(aggregate_files.items())[:20]),
+        "subagent_role_stats": aggregate_subagent_roles,
         "recommended_packets": packet_recommendations,
         "sessions": aggregate_sessions,
     }
@@ -897,6 +1201,7 @@ def main(argv):
         "packet_count": len(selected_items),
         "matching_session_count": len(matches),
         "patterns": args.patterns,
+        "session_id_filter": args.session_id,
         "sessions": next_sessions,
         "suggested_next_step": "Read aggregate.json and index.md, then selectively read packet files to write report.md in this output directory.",
     }

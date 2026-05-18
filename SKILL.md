@@ -19,6 +19,8 @@ Parse `$ARGUMENTS` as:
 
 - target path/glob: a Claude Code session startup cwd, project directory, worktree, or glob
 - mode: `brief` or `detailed`
+- optional latest count: `latest:N`, or natural language such as "latest 3 sessions"
+- optional session ID: a full Claude Code session UUID or unique UUID prefix
 
 Use these canonical modes internally:
 
@@ -31,6 +33,13 @@ shell cwd may differ from the session startup directory after `!cd` or other
 commands.
 
 Default mode is `brief`.
+
+If a full UUID or UUID prefix is provided, run a single-session collection with
+`--session-id`. A target path/glob may still be provided to disambiguate, but it
+is not required for session-id mode.
+
+If the user asks for the latest N sessions, pass `--limit N` or include
+`latest:N`.
 
 ## Collector
 
@@ -48,6 +57,7 @@ Use these defaults:
 Useful optional flags:
 
 ```bash
+--session-id 45685c9d-0a30-4101-9924-e1eda0abc0c4
 --exclude-noop
 --max-main-lines 180
 --max-agent-lines 80
@@ -66,6 +76,11 @@ Useful optional flags:
 For `brief`, open only the strongest recommended packets, usually 2-4 packets.
 For `detailed`, use more of `recommended_packets`, but still avoid opening every
 packet unless needed.
+
+Packet files can be very large. Before opening a packet, prefer `index.md` and
+`aggregate.json` metadata. When a packet may be large, read only targeted
+sections or bounded line ranges. Do not attempt a full read of multi-megabyte
+packet files.
 
 ## Packet Selection
 
@@ -92,6 +107,13 @@ Use `index.md` flags to refine the selection:
 For subagent analysis, compare `raw_subagent_transcript_count` with
 `logical_subagent_role_count`; raw transcripts can be split across files, while
 logical roles come from parent delegation labels.
+
+Also inspect `subagent_role_stats`, `subagent_*`, and `combined_*` fields in
+`aggregate.json`. The legacy `verification_count` and `error_count` fields are
+main-session counts; subagent verification and errors are reported separately.
+Subagent tool counts are de-duplicated by tool_use ID, but subagent active
+minutes are cumulative transcript time and can still include repeated context
+from resumed agents.
 
 ## Report Shape
 

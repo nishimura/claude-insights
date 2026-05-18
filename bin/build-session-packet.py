@@ -54,6 +54,18 @@ def md_block(text):
 def timestamp_to_epoch(timestamp):
     if not timestamp:
         return None
+    value = str(timestamp)
+    if value.endswith("Z"):
+        value = value[:-1]
+    if "." in value:
+        value = value.split(".", 1)[0]
+    for suffix in ("+00:00", "-00:00"):
+        if value.endswith(suffix):
+            value = value[:-len(suffix)]
+    try:
+        return int((datetime.strptime(value, "%Y-%m-%dT%H:%M:%S") - datetime(1970, 1, 1)).total_seconds())
+    except Exception:
+        return None
 
 
 def duration_metrics(chain):
@@ -79,18 +91,6 @@ def duration_metrics(chain):
         "active_duration_minutes": int(round(active_seconds / 60.0)),
         "large_idle_gap_count": large_gaps,
     }
-    value = str(timestamp)
-    if value.endswith("Z"):
-        value = value[:-1]
-    if "." in value:
-        value = value.split(".", 1)[0]
-    for suffix in ("+00:00", "-00:00"):
-        if value.endswith(suffix):
-            value = value[:-len(suffix)]
-    try:
-        return int((datetime.strptime(value, "%Y-%m-%dT%H:%M:%S") - datetime(1970, 1, 1)).total_seconds())
-    except Exception:
-        return None
 
 
 def read_jsonl(path):
