@@ -172,6 +172,12 @@ Use these sections unless the user asks otherwise:
 Keep reports concise in `brief` mode. In `detailed` mode, include more evidence
 and more packet IDs, but still summarize rather than pasting packet content.
 
+## Self-Test Mode
+
+If the user invokes `/claude-insights self-test ...`, read
+[self-test.md](self-test.md) for the full self-test workflow, required checks,
+and verdict format. Do not load this file in normal report mode.
+
 ## Future Experiment
 
 Do not add `context: fork` yet. It should be tested separately after this

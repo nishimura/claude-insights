@@ -116,6 +116,24 @@ Session IDs are supported as full UUIDs or unique UUID prefixes. In session-id
 mode, the cwd path/glob is optional and `--session-id` is used internally. Latest
 count requests can be expressed as `latest:N`, which maps to `--limit N`.
 
+## Self-Test Mode
+
+Use self-test when you want to analyze a previous `claude-insights` execution
+itself rather than the target project:
+
+```text
+/claude-insights self-test <session-id>
+```
+
+Prefer an explicit session ID. Avoid `latest:1` for self-test unless you have
+confirmed the target session, because it can select the current self-test
+session instead of the previous run.
+
+Self-test should write `self-test-report.md`. It checks log-format health,
+parser behavior, numeric consistency, direct `aggregate.json`/`index.md` reads,
+large-packet handling, report verification, and accidental ad hoc `python -c`
+usage.
+
 ## Direct CLI Use
 
 From the repository root:
