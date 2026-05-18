@@ -173,10 +173,24 @@ VERIFY_RE = re.compile(
     r"\b(test|tests|phpunit|phpstan|pytest|cargo\s+test|npm\s+(run\s+)?test|npm\s+run\s+(check|lint|build)|pnpm\s+(test|lint|build|check)|yarn\s+(test|lint|build|check)|make\s+(test|check|lint)|tsc|eslint|ruff|mypy|go\s+test|bundle\s+exec\s+rspec)\b",
     re.IGNORECASE,
 )
+REPORT_VERIFY_RE = re.compile(
+    r"\b(report\.md)\b.*\b(grep|rg|head|tail|wc|sed)\b|\b(grep|rg|head|tail|wc|sed)\b.*\b(report\.md)\b",
+    re.IGNORECASE,
+)
 
 
 def is_verification_command(command):
     return VERIFY_RE.search(command) is not None
+
+
+def is_report_verification_command(command):
+    return REPORT_VERIFY_RE.search(command) is not None
+
+
+def classify_report_verification_result(_text, is_error):
+    if is_error:
+        return "failure"
+    return "success"
 
 
 def timestamp_to_epoch(timestamp):
@@ -267,11 +281,25 @@ def count_user_corrections(entries):
     return count
 
 
+def clean_role_label(value):
+    label = clip_text(str(value), 80)
+    if not label:
+        return ""
+    lowered = label.lower()
+    if lowered in ("ok", "okay", "yes", "no", "done", "complete", "completed", "success"):
+        return ""
+    if len(label) <= 2 and label.upper() == label:
+        return ""
+    return label
+
+
 def role_label_from_agent_input(input_data):
     for key in ("subagent_type", "name", "description"):
         value = input_data.get(key)
-        if isinstance(value, str) and value.strip():
-            return clip_text(value, 80)
+        if isinstance(value, str):
+            label = clean_role_label(value)
+            if label:
+                return label
     return ""
 
 
@@ -463,6 +491,10 @@ def summarize_session(meta):
     verification_success_count = 0
     verification_failure_count = 0
     verification_unknown_count = 0
+    report_verification_count = 0
+    report_verification_success_count = 0
+    report_verification_failure_count = 0
+    report_verification_unknown_count = 0
     pending_tools = {}
 
     for entry in entries:
@@ -488,8 +520,11 @@ def summarize_session(meta):
                             "name": name,
                             "command": command if isinstance(command, str) else "",
                         }
-                    if isinstance(command, str) and is_verification_command(command):
-                        verification_count += 1
+                    if isinstance(command, str):
+                        if is_verification_command(command):
+                            verification_count += 1
+                        if is_report_verification_command(command):
+                            report_verification_count += 1
                     if name in ("Agent", "Task"):
                         agent_calls += 1
                         role = role_label_from_agent_input(input_data)
@@ -513,6 +548,14 @@ def summarize_session(meta):
                             verification_failure_count += 1
                         else:
                             verification_unknown_count += 1
+                    if tool_meta and is_report_verification_command(tool_meta.get("command", "")):
+                        result = classify_report_verification_result(str(block.get("content", "")), block.get("is_error") is True)
+                        if result == "success":
+                            report_verification_success_count += 1
+                        elif result == "failure":
+                            report_verification_failure_count += 1
+                        else:
+                            report_verification_unknown_count += 1
                 if block.get("type") == "text" and "[Request interrupted by user" in str(block.get("text", "")):
                     interrupted = True
         elif entry.get("type") == "user" and isinstance(content, str):
@@ -604,6 +647,10 @@ def summarize_session(meta):
         "verification_success_count": verification_success_count,
         "verification_failure_count": verification_failure_count,
         "verification_unknown_count": verification_unknown_count,
+        "report_verification_count": report_verification_count,
+        "report_verification_success_count": report_verification_success_count,
+        "report_verification_failure_count": report_verification_failure_count,
+        "report_verification_unknown_count": report_verification_unknown_count,
         "error_count": errors,
         "interrupted": interrupted,
         "raw_subagent_transcript_count": raw_subagent_count,
@@ -646,9 +693,10 @@ def parent_agent_launches(parent_entries):
 
 def extract_ascii_quoted_label(text):
     for value in re.findall(r"\u300c([A-Za-z][A-Za-z0-9_.-]{1,79})\u300d", text):
-        lowered = value.lower()
-        if lowered not in ("team", "task", "agent") and "issue" not in lowered:
-            return value
+        label = clean_role_label(value)
+        lowered = label.lower()
+        if label and lowered not in ("team", "task", "agent") and "issue" not in lowered:
+            return label
     return ""
 
 
@@ -663,20 +711,21 @@ def extract_subagent_role(entries, fallback, launches):
         first_text = " ".join(text.split())
         quoted = extract_ascii_quoted_label(text)
         if quoted:
-            return clip_text(quoted, 80)
+            return quoted
         for launch in launches:
             prompt = launch["prompt"]
             if prompt and (first_text.startswith(prompt[:200]) or prompt[:200] in first_text):
                 return launch["label"]
         match = re.search(r"member(?:\s+name)?\s*[:=]\s*([A-Za-z0-9_.-]{1,80})", text, re.IGNORECASE)
         if match:
-            return clip_text(match.group(1), 80)
+            label = clean_role_label(match.group(1))
+            if label:
+                return label
         match = re.search(r"role\s*[:=]\s*([A-Za-z0-9_.-]{1,80})", text, re.IGNORECASE)
         if match:
-            return clip_text(match.group(1), 80)
-        match = re.search(r"<teammate-message[^>]*\bsummary=\"([^\"]{1,80})\"", text)
-        if match:
-            return clip_text(match.group(1), 80)
+            label = clean_role_label(match.group(1))
+            if label:
+                return label
         break
     if first_text:
         best = None
@@ -1051,6 +1100,10 @@ def main(argv):
         "verification_success_count": 0,
         "verification_failure_count": 0,
         "verification_unknown_count": 0,
+        "report_verification_count": 0,
+        "report_verification_success_count": 0,
+        "report_verification_failure_count": 0,
+        "report_verification_unknown_count": 0,
         "subagent_verification_count": 0,
         "subagent_verification_success_count": 0,
         "subagent_verification_failure_count": 0,
@@ -1124,6 +1177,10 @@ def main(argv):
             "verification_success_count": summary["verification_success_count"],
             "verification_failure_count": summary["verification_failure_count"],
             "verification_unknown_count": summary["verification_unknown_count"],
+            "report_verification_count": summary["report_verification_count"],
+            "report_verification_success_count": summary["report_verification_success_count"],
+            "report_verification_failure_count": summary["report_verification_failure_count"],
+            "report_verification_unknown_count": summary["report_verification_unknown_count"],
             "subagent_verification_count": subagent_totals["verification_count"],
             "subagent_verification_success_count": subagent_totals["verification_success_count"],
             "subagent_verification_failure_count": subagent_totals["verification_failure_count"],
@@ -1169,6 +1226,10 @@ def main(argv):
         aggregate_totals["verification_success_count"] += summary["verification_success_count"]
         aggregate_totals["verification_failure_count"] += summary["verification_failure_count"]
         aggregate_totals["verification_unknown_count"] += summary["verification_unknown_count"]
+        aggregate_totals["report_verification_count"] += summary["report_verification_count"]
+        aggregate_totals["report_verification_success_count"] += summary["report_verification_success_count"]
+        aggregate_totals["report_verification_failure_count"] += summary["report_verification_failure_count"]
+        aggregate_totals["report_verification_unknown_count"] += summary["report_verification_unknown_count"]
         aggregate_totals["subagent_verification_count"] += subagent_totals["verification_count"]
         aggregate_totals["subagent_verification_success_count"] += subagent_totals["verification_success_count"]
         aggregate_totals["subagent_verification_failure_count"] += subagent_totals["verification_failure_count"]
@@ -1268,6 +1329,12 @@ def main(argv):
         aggregate_totals["verification_success_count"],
         aggregate_totals["verification_failure_count"],
         aggregate_totals["verification_unknown_count"],
+    ))
+    index.append("- Report verification count: %s (success %s, failure %s, unknown %s)" % (
+        aggregate_totals["report_verification_count"],
+        aggregate_totals["report_verification_success_count"],
+        aggregate_totals["report_verification_failure_count"],
+        aggregate_totals["report_verification_unknown_count"],
     ))
     index.append("- Subagent verification count: %s (success %s, failure %s, unknown %s)" % (
         aggregate_totals["subagent_verification_count"],

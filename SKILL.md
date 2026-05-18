@@ -136,6 +136,9 @@ logical roles come from parent delegation labels.
 Also inspect `subagent_role_stats`, `subagent_*`, and `combined_*` fields in
 `aggregate.json`. The legacy `verification_count` and `error_count` fields are
 main-session counts; subagent verification and errors are reported separately.
+Report/document completeness checks are counted separately in
+`report_verification_*` fields and are not included in build/test
+`verification_count`.
 Subagent tool counts are de-duplicated by tool_use ID. Prefer
 `active_minutes_union` for elapsed role activity; `active_minutes_cumulative`
 can include repeated context from resumed agents.

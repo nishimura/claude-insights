@@ -183,6 +183,10 @@ available in `subagent_role_stats`. Subagent tool counts are de-duplicated by
 tool_use ID. Prefer `active_minutes_union` for elapsed role activity;
 `active_minutes_cumulative` can include repeated context from resumed agents.
 
+Report/document completeness checks such as `grep '^## ' report.md`, `wc -l`,
+or `tail report.md` are counted separately as `report_verification_*` fields.
+They are not included in build/test `verification_count`.
+
 Packet sizing metadata is included as `packet_size_bytes`, `packet_line_count`,
 `large_packet`, `very_large_packet`, and `suggested_read_strategy`, so report
 authors can avoid full reads of large packet files.

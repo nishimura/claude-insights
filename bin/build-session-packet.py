@@ -21,6 +21,10 @@ VERIFY_RE = re.compile(
     r"\b(test|tests|phpunit|phpstan|pytest|cargo\s+test|npm\s+(run\s+)?test|npm\s+run\s+(check|lint|build)|pnpm\s+(test|lint|build|check)|yarn\s+(test|lint|build|check)|make\s+(test|check|lint)|tsc|eslint|ruff|mypy|go\s+test|bundle\s+exec\s+rspec)\b",
     re.IGNORECASE,
 )
+REPORT_VERIFY_RE = re.compile(
+    r"\b(report\.md)\b.*\b(grep|rg|head|tail|wc|sed)\b|\b(grep|rg|head|tail|wc|sed)\b.*\b(report\.md)\b",
+    re.IGNORECASE,
+)
 FAILURE_RE = re.compile(r"(fail|failed|failure|error|exit code [1-9]|not ok|fatal|exception)", re.IGNORECASE)
 SUCCESS_RE = re.compile(r"(success|successful|passed|passing|ok|no errors|0 failures|0 errors)", re.IGNORECASE)
 
@@ -238,6 +242,16 @@ def is_verification_command(command):
     return VERIFY_RE.search(command) is not None
 
 
+def is_report_verification_command(command):
+    return REPORT_VERIFY_RE.search(command) is not None
+
+
+def classify_report_verification_result(_text, is_error):
+    if is_error:
+        return "failure"
+    return "success"
+
+
 def text_from_tool_result_content(content):
     if isinstance(content, str):
         return content
@@ -276,6 +290,10 @@ def collect_stats(chain, max_commands):
     verification_success_count = 0
     verification_failure_count = 0
     verification_unknown_count = 0
+    report_verification_count = 0
+    report_verification_success_count = 0
+    report_verification_failure_count = 0
+    report_verification_unknown_count = 0
     send_message_count = 0
 
     for msg in chain:
@@ -303,8 +321,11 @@ def collect_stats(chain, max_commands):
                             "name": name,
                             "command": command if isinstance(command, str) else "",
                         }
-                    if isinstance(command, str) and is_verification_command(command):
-                        verification_count += 1
+                    if isinstance(command, str):
+                        if is_verification_command(command):
+                            verification_count += 1
+                        if is_report_verification_command(command):
+                            report_verification_count += 1
                     if isinstance(command, str) and len(commands) < max_commands:
                         commands.append(one_line(command, COMMAND_CLIP))
 
@@ -328,6 +349,14 @@ def collect_stats(chain, max_commands):
                             verification_failure_count += 1
                         else:
                             verification_unknown_count += 1
+                    if tool_meta and is_report_verification_command(tool_meta.get("command", "")):
+                        report_kind = classify_report_verification_result(result_text, is_error)
+                        if report_kind == "success":
+                            report_verification_success_count += 1
+                        elif report_kind == "failure":
+                            report_verification_failure_count += 1
+                        else:
+                            report_verification_unknown_count += 1
                     if is_error or result_kind is not None:
                         notable_results.append({
                             "kind": "verification" if result_kind is not None else "error",
@@ -354,6 +383,10 @@ def collect_stats(chain, max_commands):
         "verificationSuccessCount": verification_success_count,
         "verificationFailureCount": verification_failure_count,
         "verificationUnknownCount": verification_unknown_count,
+        "reportVerificationCount": report_verification_count,
+        "reportVerificationSuccessCount": report_verification_success_count,
+        "reportVerificationFailureCount": report_verification_failure_count,
+        "reportVerificationUnknownCount": report_verification_unknown_count,
         "sendMessageCount": send_message_count,
     }
 
@@ -543,6 +576,12 @@ def main(argv):
         main_stats["verificationFailureCount"],
         main_stats["verificationUnknownCount"],
     ))
+    out.append("- Main report verification commands: %s (success %s, failure %s, unknown %s)" % (
+        main_stats["reportVerificationCount"],
+        main_stats["reportVerificationSuccessCount"],
+        main_stats["reportVerificationFailureCount"],
+        main_stats["reportVerificationUnknownCount"],
+    ))
     out.append("- Main interrupted by user: %s" % ("yes" if main_stats["interrupted"] else "no"))
     if main_stats["commands"]:
         out.append("- Main shell commands observed:")
@@ -589,6 +628,12 @@ def main(argv):
                 stats["verificationSuccessCount"],
                 stats["verificationFailureCount"],
                 stats["verificationUnknownCount"],
+            ))
+            out.append("- Report verification commands: %s (success %s, failure %s, unknown %s)" % (
+                stats["reportVerificationCount"],
+                stats["reportVerificationSuccessCount"],
+                stats["reportVerificationFailureCount"],
+                stats["reportVerificationUnknownCount"],
             ))
             out.append("- Interrupted by user: %s" % ("yes" if stats["interrupted"] else "no"))
 
