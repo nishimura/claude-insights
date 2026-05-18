@@ -3,6 +3,8 @@ from __future__ import print_function
 
 import json
 import os
+import argparse
+import re
 import sys
 from datetime import datetime
 
@@ -14,6 +16,13 @@ MAX_TIMELINE_LINES = 220
 MAX_AGENT_TIMELINE_LINES = 120
 MAX_FILES = 30
 MAX_COMMANDS = 20
+IDLE_GAP_SECONDS = 30 * 60
+VERIFY_RE = re.compile(
+    r"\b(test|tests|phpunit|phpstan|pytest|cargo\s+test|npm\s+(run\s+)?test|npm\s+run\s+(check|lint|build)|pnpm\s+(test|lint|build|check)|yarn\s+(test|lint|build|check)|make\s+(test|check|lint)|tsc|eslint|ruff|mypy|go\s+test|bundle\s+exec\s+rspec)\b",
+    re.IGNORECASE,
+)
+FAILURE_RE = re.compile(r"(fail|failed|failure|error|exit code [1-9]|not ok|fatal|exception)", re.IGNORECASE)
+SUCCESS_RE = re.compile(r"(success|successful|passed|passing|ok|no errors|0 failures|0 errors)", re.IGNORECASE)
 
 
 def usage():
@@ -45,6 +54,31 @@ def md_block(text):
 def timestamp_to_epoch(timestamp):
     if not timestamp:
         return None
+
+
+def duration_metrics(chain):
+    timestamps = []
+    for msg in chain:
+        epoch = timestamp_to_epoch(msg.get("timestamp"))
+        if epoch is not None:
+            timestamps.append(epoch)
+    if not timestamps:
+        return {"wall_duration_minutes": 0, "active_duration_minutes": 0, "large_idle_gap_count": 0}
+    timestamps.sort()
+    wall = max(0, int(round((timestamps[-1] - timestamps[0]) / 60.0)))
+    active_seconds = 0
+    large_gaps = 0
+    for idx in range(1, len(timestamps)):
+        gap = timestamps[idx] - timestamps[idx - 1]
+        if gap > IDLE_GAP_SECONDS:
+            large_gaps += 1
+        else:
+            active_seconds += max(0, gap)
+    return {
+        "wall_duration_minutes": wall,
+        "active_duration_minutes": int(round(active_seconds / 60.0)),
+        "large_idle_gap_count": large_gaps,
+    }
     value = str(timestamp)
     if value.endswith("Z"):
         value = value[:-1]
@@ -200,13 +234,49 @@ def first_text(chain, msg_type, clip):
     return ""
 
 
-def collect_stats(chain):
+def is_verification_command(command):
+    return VERIFY_RE.search(command) is not None
+
+
+def text_from_tool_result_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+                elif "content" in block:
+                    parts.append(str(block.get("content", "")))
+        return "\n".join(parts)
+    return str(content)
+
+
+def classify_verification_result(text, is_error):
+    if is_error:
+        return "failure"
+    if SUCCESS_RE.search(text):
+        return "success"
+    if FAILURE_RE.search(text):
+        return "failure"
+    return "unknown"
+
+
+def collect_stats(chain, max_commands):
     tools = {}
     files = {}
     commands = []
     errors = 0
     interrupted = False
     agent_calls = 0
+    pending_tools = {}
+    notable_results = []
+    verification_count = 0
+    verification_success_count = 0
+    verification_failure_count = 0
+    verification_unknown_count = 0
+    send_message_count = 0
 
     for msg in chain:
         content = msg.get("message", {}).get("content")
@@ -215,9 +285,12 @@ def collect_stats(chain):
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 name = str(block.get("name", "unknown"))
+                tool_id = block.get("id")
                 tools[name] = tools.get(name, 0) + 1
                 if name in ("Agent", "Task"):
                     agent_calls += 1
+                if name == "SendMessage":
+                    send_message_count += 1
                 input_data = block.get("input")
                 if isinstance(input_data, dict):
                     for key in ("file_path", "path"):
@@ -225,15 +298,44 @@ def collect_stats(chain):
                         if isinstance(value, str) and value:
                             files[value] = True
                     command = input_data.get("command")
-                    if isinstance(command, str) and len(commands) < MAX_COMMANDS:
+                    if isinstance(tool_id, str):
+                        pending_tools[tool_id] = {
+                            "name": name,
+                            "command": command if isinstance(command, str) else "",
+                        }
+                    if isinstance(command, str) and is_verification_command(command):
+                        verification_count += 1
+                    if isinstance(command, str) and len(commands) < max_commands:
                         commands.append(one_line(command, COMMAND_CLIP))
 
         if msg.get("type") == "user" and isinstance(content, list):
             for block in content:
                 if not isinstance(block, dict):
                     continue
-                if block.get("type") == "tool_result" and block.get("is_error") is True:
-                    errors += 1
+                if block.get("type") == "tool_result":
+                    is_error = block.get("is_error") is True
+                    if is_error:
+                        errors += 1
+                    tool_id = block.get("tool_use_id")
+                    tool_meta = pending_tools.get(tool_id) if isinstance(tool_id, str) else None
+                    result_text = text_from_tool_result_content(block.get("content", ""))
+                    result_kind = None
+                    if tool_meta and is_verification_command(tool_meta.get("command", "")):
+                        result_kind = classify_verification_result(result_text, is_error)
+                        if result_kind == "success":
+                            verification_success_count += 1
+                        elif result_kind == "failure":
+                            verification_failure_count += 1
+                        else:
+                            verification_unknown_count += 1
+                    if is_error or result_kind is not None:
+                        notable_results.append({
+                            "kind": "verification" if result_kind is not None else "error",
+                            "status": result_kind or "error",
+                            "tool": tool_meta.get("name", "unknown") if tool_meta else "unknown",
+                            "command": tool_meta.get("command", "") if tool_meta else "",
+                            "text": one_line(result_text, 320),
+                        })
                 if block.get("type") == "text" and "[Request interrupted by user" in str(block.get("text", "")):
                     interrupted = True
         elif msg.get("type") == "user" and isinstance(content, str):
@@ -247,6 +349,12 @@ def collect_stats(chain):
         "errors": errors,
         "interrupted": interrupted,
         "agentCalls": agent_calls,
+        "notableResults": notable_results[:20],
+        "verificationCount": verification_count,
+        "verificationSuccessCount": verification_success_count,
+        "verificationFailureCount": verification_failure_count,
+        "verificationUnknownCount": verification_unknown_count,
+        "sendMessageCount": send_message_count,
     }
 
 
@@ -321,15 +429,34 @@ def chain_end(chain):
     return str(chain[-1].get("timestamp", "")) if chain else ""
 
 
-def main(argv):
-    if len(argv) == 2 and argv[1] in ("-h", "--help"):
-        usage()
-        return 0
-    if len(argv) != 2:
-        usage()
-        return 2
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="Build one Claude Code session analysis packet.")
+    parser.add_argument("--max-main-lines", type=int, default=MAX_TIMELINE_LINES)
+    parser.add_argument("--max-agent-lines", type=int, default=MAX_AGENT_TIMELINE_LINES)
+    parser.add_argument("--max-agents", type=int, default=0, help="Maximum agents to include; 0 means all.")
+    parser.add_argument("--max-files", type=int, default=MAX_FILES)
+    parser.add_argument("--max-commands", type=int, default=MAX_COMMANDS)
+    parser.add_argument("session_file")
+    return parser.parse_args(argv[1:])
 
-    path = argv[1]
+
+def agent_outcome(stats):
+    if stats["interrupted"]:
+        return "interrupted"
+    if stats["errors"] >= 2:
+        return "error-heavy"
+    if stats["sendMessageCount"] > 0:
+        return "completed"
+    return "unclear"
+
+
+def main(argv):
+    try:
+        args = parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code)
+
+    path = args.session_file
     if not os.path.isfile(path):
         sys.stderr.write("error: file not found: %s\n" % path)
         return 1
@@ -347,7 +474,7 @@ def main(argv):
     if not session_id:
         session_id = os.path.splitext(os.path.basename(path))[0]
 
-    main_stats = collect_stats(main_chain)
+    main_stats = collect_stats(main_chain, args.max_commands)
     subagent_files = discover_subagent_files(path, session_id)
     agents = []
     for agent_file in subagent_files:
@@ -359,9 +486,11 @@ def main(argv):
             "file": agent_file,
             "name": os.path.splitext(os.path.basename(agent_file))[0],
             "chain": chain,
-            "stats": collect_stats(chain),
+            "stats": collect_stats(chain, args.max_commands),
         })
     agents.sort(key=lambda agent: chain_start(agent["chain"]))
+    if args.max_agents > 0:
+        agents = agents[:args.max_agents]
 
     overlaps = 0
     for i in range(len(agents)):
@@ -386,7 +515,10 @@ def main(argv):
     out.append("- Project: `%s`" % md_inline(project_path))
     out.append("- Started: `%s`" % md_inline(chain_start(main_chain)))
     out.append("- Ended: `%s`" % md_inline(chain_end(main_chain)))
+    main_duration = duration_metrics(main_chain)
     out.append("- Duration minutes: %s" % duration_minutes(main_chain))
+    out.append("- Active duration minutes: %s" % main_duration["active_duration_minutes"])
+    out.append("- Large idle gap count: %s" % main_duration["large_idle_gap_count"])
     out.append("- Main human user messages: %s" % count_human_users(main_chain))
     out.append("- Main assistant/tool messages: %s" % sum(1 for m in main_chain if m.get("type") == "assistant"))
     out.append("- Main tools: %s" % md_inline(format_counts(main_stats["tools"])))
@@ -399,18 +531,38 @@ def main(argv):
 
     out.append("## Main Timeline\n")
     out.append("```text")
-    out.append(md_block("\n".join(timeline_lines(main_chain, MAX_TIMELINE_LINES, True))))
+    out.append(md_block("\n".join(timeline_lines(main_chain, args.max_main_lines, True))))
     out.append("```\n")
 
     out.append("## Main Signals\n")
     out.append("- Agent tool calls in main session: %s" % main_stats["agentCalls"])
     out.append("- Main tool errors observed: %s" % main_stats["errors"])
+    out.append("- Main verification commands: %s (success %s, failure %s, unknown %s)" % (
+        main_stats["verificationCount"],
+        main_stats["verificationSuccessCount"],
+        main_stats["verificationFailureCount"],
+        main_stats["verificationUnknownCount"],
+    ))
     out.append("- Main interrupted by user: %s" % ("yes" if main_stats["interrupted"] else "no"))
     if main_stats["commands"]:
         out.append("- Main shell commands observed:")
         for command in main_stats["commands"]:
             out.append("  - `%s`" % md_inline(command))
     out.append("")
+    if main_stats["notableResults"]:
+        out.append("### Notable Main Tool Results\n")
+        for result in main_stats["notableResults"]:
+            label = result["kind"]
+            status = result["status"]
+            command = (" `" + md_inline(result["command"]) + "`") if result["command"] else ""
+            out.append("- [%s:%s] %s%s: %s" % (
+                label,
+                status,
+                result["tool"],
+                command,
+                md_inline(result["text"]),
+            ))
+        out.append("")
 
     out.append("## Agent Activity\n")
     if not agents:
@@ -419,16 +571,25 @@ def main(argv):
         for idx, agent in enumerate(agents):
             chain = agent["chain"]
             stats = agent["stats"]
-            files = sorted(stats["files"].keys())[:MAX_FILES]
+            files = sorted(stats["files"].keys())[:args.max_files]
+            agent_duration = duration_metrics(chain)
             out.append("### Agent %s: `%s`\n" % (idx + 1, md_inline(agent["name"])))
             out.append("- File: `%s`" % md_inline(agent["file"]))
             out.append("- Started: `%s`" % md_inline(chain_start(chain)))
             out.append("- Ended: `%s`" % md_inline(chain_end(chain)))
             out.append("- Duration minutes: %s" % duration_minutes(chain))
+            out.append("- Active duration minutes: %s" % agent_duration["active_duration_minutes"])
+            out.append("- Outcome: %s" % agent_outcome(stats))
             out.append("- Human/task messages: %s" % count_human_users(chain))
             out.append("- Assistant/tool messages: %s" % sum(1 for m in chain if m.get("type") == "assistant"))
             out.append("- Tools: %s" % md_inline(format_counts(stats["tools"])))
             out.append("- Tool errors observed: %s" % stats["errors"])
+            out.append("- Verification commands: %s (success %s, failure %s, unknown %s)" % (
+                stats["verificationCount"],
+                stats["verificationSuccessCount"],
+                stats["verificationFailureCount"],
+                stats["verificationUnknownCount"],
+            ))
             out.append("- Interrupted by user: %s" % ("yes" if stats["interrupted"] else "no"))
 
             task = first_text(chain, "user", TASK_CLIP)
@@ -443,9 +604,20 @@ def main(argv):
                 out.append("\n#### Shell Commands Observed\n")
                 for command in stats["commands"]:
                     out.append("- `%s`" % md_inline(command))
+            if stats["notableResults"]:
+                out.append("\n#### Notable Tool Results\n")
+                for result in stats["notableResults"]:
+                    command = (" `" + md_inline(result["command"]) + "`") if result["command"] else ""
+                    out.append("- [%s:%s] %s%s: %s" % (
+                        result["kind"],
+                        result["status"],
+                        result["tool"],
+                        command,
+                        md_inline(result["text"]),
+                    ))
             out.append("\n#### Agent Timeline Excerpt\n")
             out.append("```text")
-            out.append(md_block("\n".join(timeline_lines(chain, MAX_AGENT_TIMELINE_LINES, False))))
+            out.append(md_block("\n".join(timeline_lines(chain, args.max_agent_lines, False))))
             out.append("```\n")
 
     out.append("## Combined Delegation Signals\n")

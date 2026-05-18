@@ -121,6 +121,13 @@ python3 bin/collect-project-packets.py --limit 5 "/path/to/project/branch_*"
 
 On Windows, use `py` if that is the configured Python launcher.
 
+Useful options:
+
+```bash
+python3 bin/collect-project-packets.py --limit 30 --exclude-noop "/path/to/project/branch_*"
+python3 bin/collect-project-packets.py --max-main-lines 180 --max-agent-lines 80 "/path/to/project/branch_*"
+```
+
 This writes a run directory:
 
 ```text
@@ -146,15 +153,17 @@ agent-call counts. Read this first alongside `aggregate.json`.
 
 Machine-readable run summary for high-limit reports. It includes per-session
 first intent, session kind, substantive / low-signal / no-op classification,
-edit/write count, verification count, error count, interruption signal, raw
-subagent transcript count, logical subagent role count, top files, and top
-tools.
+report-worthy flags, edit/write count, verification count and success/failure
+breakdown, error count, interruption signal, active duration, user-correction
+signals, raw subagent transcript count, logical subagent role count, top files,
+top tools, and recommended packet groups.
 
 `packets/<session-id>.md`
 
 Detailed per-session packet. It separates main-session behavior from subagent
 behavior and includes clipped timelines, tool counts, errors, referenced files,
-and shell commands.
+shell commands, notable error/verification tool results, verification outcome
+counts, active duration, and subagent outcome hints.
 
 `next-action.json`
 

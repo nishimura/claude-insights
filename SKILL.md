@@ -25,7 +25,7 @@ python3 bin/collect-project-packets.py --limit 20 "/path/to/project/branch_*"
 
 If not running from the skill directory, use the absolute path to this skill's `bin/collect-project-packets.py`.
 
-3. Read only the generated `aggregate.json` and `index.md` first. They list packet files, scope metadata, session kinds, first intents, signal classes, edit/write counts, verification counts, errors, interruption signals, raw subagent transcript counts, logical subagent role counts, and top files.
+3. Read only the generated `aggregate.json` and `index.md` first. They list packet files, recommended packet groups, scope metadata, session kinds, report-worthy flags, first intents, signal classes, edit/write counts, verification counts and success/failure breakdowns, errors, interruption signals, active duration, user-correction signals, raw subagent transcript counts, logical subagent role counts, and top files.
 
 4. Read selected packet files as needed. Do not read every packet blindly when many sessions match.
 
@@ -35,8 +35,8 @@ If not running from the skill directory, use the absolute path to this skill's `
 
 When `--limit` is high, use this order instead of opening every packet:
 
-1. Start from `aggregate.json` to identify session-kind distribution, no-op / low-signal noise, top files, interrupted sessions, and sessions with errors.
-2. Use `index.md` to choose packets with substantive signal first, especially delegated, implementation, verification, error-heavy, or interrupted sessions.
+1. Start from `aggregate.json`, especially `recommended_packets`, to identify agent-heavy, error-heavy, edit-heavy, verification-heavy, interrupted, representative, and no-op example sessions.
+2. Use `index.md` flags to choose packets with substantive signal first, especially delegated, implementation, verification-heavy, error-heavy, edit-heavy, user-correction, or interrupted sessions.
 3. Sample at most a few low-signal or no-op packets when they explain scope noise, aborted work, or repeated setup friction.
 4. For subagent analysis, compare `raw_subagent_transcript_count` with `logical_subagent_role_count`; raw transcripts can be split across files, while logical roles come from parent delegation labels.
 5. Record which packets were opened in the report's Evidence section.

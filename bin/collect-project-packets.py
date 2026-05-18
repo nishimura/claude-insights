@@ -16,6 +16,13 @@ except ImportError:
     html_unescape = None
 
 INTENT_CLIP = 140
+IDLE_GAP_SECONDS = 30 * 60
+USER_CORRECTION_RE = re.compile(
+    r"(違う|そうではなく|もう一度|ニュアンス|wrong|not right|try again)",
+    re.IGNORECASE,
+)
+FAILURE_RE = re.compile(r"(fail|failed|failure|error|exit code [1-9]|not ok|fatal|exception)", re.IGNORECASE)
+SUCCESS_RE = re.compile(r"(success|successful|passed|passing|ok|no errors|0 failures|0 errors)", re.IGNORECASE)
 
 
 def expand_home(path):
@@ -161,6 +168,94 @@ def is_verification_command(command):
     return VERIFY_RE.search(command) is not None
 
 
+def timestamp_to_epoch(timestamp):
+    if not timestamp:
+        return None
+    value = str(timestamp)
+    if value.endswith("Z"):
+        value = value[:-1]
+    if "." in value:
+        value = value.split(".", 1)[0]
+    for suffix in ("+00:00", "-00:00"):
+        if value.endswith(suffix):
+            value = value[:-len(suffix)]
+    try:
+        return int((datetime.strptime(value, "%Y-%m-%dT%H:%M:%S") - datetime(1970, 1, 1)).total_seconds())
+    except Exception:
+        return None
+
+
+def duration_metrics(entries):
+    timestamps = []
+    for entry in entries:
+        epoch = timestamp_to_epoch(entry.get("timestamp"))
+        if epoch is not None:
+            timestamps.append(epoch)
+    if not timestamps:
+        return {"wall_duration_minutes": 0, "active_duration_minutes": 0, "large_idle_gap_count": 0}
+
+    timestamps.sort()
+    wall = max(0, int(round((timestamps[-1] - timestamps[0]) / 60.0)))
+    active_seconds = 0
+    large_gaps = 0
+    for idx in range(1, len(timestamps)):
+        gap = timestamps[idx] - timestamps[idx - 1]
+        if gap > IDLE_GAP_SECONDS:
+            large_gaps += 1
+        else:
+            active_seconds += max(0, gap)
+    return {
+        "wall_duration_minutes": wall,
+        "active_duration_minutes": int(round(active_seconds / 60.0)),
+        "large_idle_gap_count": large_gaps,
+    }
+
+
+def text_from_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+                elif block.get("type") == "tool_result":
+                    parts.append(str(block.get("content", "")))
+        return "\n".join(parts)
+    return ""
+
+
+def classify_verification_result(text, is_error):
+    if is_error:
+        return "failure"
+    if SUCCESS_RE.search(text):
+        return "success"
+    if FAILURE_RE.search(text):
+        return "failure"
+    return "unknown"
+
+
+def count_user_corrections(entries):
+    count = 0
+    for entry in entries:
+        if entry.get("type") != "user":
+            continue
+        content = entry.get("message", {}).get("content")
+        texts = []
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(str(block.get("text", "")))
+        for text in texts:
+            if text and not is_synthetic_user_text(text) and USER_CORRECTION_RE.search(text):
+                count += 1
+                break
+    return count
+
+
 def role_label_from_agent_input(input_data):
     for key in ("subagent_type", "name", "description"):
         value = input_data.get(key)
@@ -282,6 +377,10 @@ def summarize_session(meta):
     logical_roles = {}
     edit_write_count = 0
     verification_count = 0
+    verification_success_count = 0
+    verification_failure_count = 0
+    verification_unknown_count = 0
+    pending_tools = {}
 
     for entry in entries:
         content = entry.get("message", {}).get("content")
@@ -290,6 +389,7 @@ def summarize_session(meta):
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 name = str(block.get("name", "unknown"))
+                tool_id = block.get("id")
                 tools[name] = tools.get(name, 0) + 1
                 if name in ("Edit", "MultiEdit", "Write", "NotebookEdit"):
                     edit_write_count += 1
@@ -300,6 +400,11 @@ def summarize_session(meta):
                         if isinstance(value, str) and value:
                             files[value] = files.get(value, 0) + 1
                     command = input_data.get("command")
+                    if isinstance(tool_id, str):
+                        pending_tools[tool_id] = {
+                            "name": name,
+                            "command": command if isinstance(command, str) else "",
+                        }
                     if isinstance(command, str) and is_verification_command(command):
                         verification_count += 1
                     if name in ("Agent", "Task"):
@@ -314,6 +419,17 @@ def summarize_session(meta):
                     continue
                 if block.get("type") == "tool_result" and block.get("is_error") is True:
                     errors += 1
+                if block.get("type") == "tool_result":
+                    tool_id = block.get("tool_use_id")
+                    tool_meta = pending_tools.get(tool_id) if isinstance(tool_id, str) else None
+                    if tool_meta and is_verification_command(tool_meta.get("command", "")):
+                        result = classify_verification_result(str(block.get("content", "")), block.get("is_error") is True)
+                        if result == "success":
+                            verification_success_count += 1
+                        elif result == "failure":
+                            verification_failure_count += 1
+                        else:
+                            verification_unknown_count += 1
                 if block.get("type") == "text" and "[Request interrupted by user" in str(block.get("text", "")):
                     interrupted = True
         elif entry.get("type") == "user" and isinstance(content, str):
@@ -325,6 +441,9 @@ def summarize_session(meta):
     raw_subagent_count = len(discover_subagent_files(meta["file"], meta["session_id"]))
     logical_role_count = len(logical_roles)
     tool_count = sum(tools.values())
+    first_intent = first_user_text_from_entries(entries)
+    user_correction_count = count_user_corrections(entries)
+    durations = duration_metrics(entries)
 
     if tool_count == 0 and int(meta["assistant_messages"]) == 0:
         signal_class = "no-op"
@@ -342,39 +461,99 @@ def summarize_session(meta):
     else:
         signal_class = "substantive"
 
+    docs_signal = any("/docs/" in path or "claude-docs" in path or path.endswith(".md") for path in files)
+    intent_lower = first_intent.lower()
+    debugging_signal = errors > 0 or any(word in intent_lower for word in ("error", "fail", "fix", "原因", "エラー", "失敗"))
+    review_signal = any(word in intent_lower for word in ("review", "レビュー", "差分", "説明して"))
+    planning_signal = "plan" in intent_lower or any("PlanMode" == name or "ExitPlanMode" == name for name in tools)
+    investigation_signal = edit_write_count == 0 and (tools.get("Read", 0) + tools.get("Grep", 0) + tools.get("Glob", 0) + tools.get("Bash", 0)) >= 3
+
     if agent_calls > 0 and raw_subagent_count > 0:
         session_kind = "delegated"
     elif agent_calls > 0:
         session_kind = "delegation-attempt"
+    elif signal_class == "no-op":
+        session_kind = "no-op"
+    elif docs_signal and edit_write_count > 0:
+        session_kind = "docs"
+    elif debugging_signal:
+        session_kind = "debugging"
+    elif review_signal:
+        session_kind = "review"
+    elif planning_signal:
+        session_kind = "planning"
     elif edit_write_count > 0:
         session_kind = "implementation"
     elif verification_count > 0:
         session_kind = "verification"
-    elif signal_class == "no-op":
-        session_kind = "no-op"
+    elif investigation_signal:
+        session_kind = "investigation"
     else:
         session_kind = "conversation"
 
+    flags = []
+    if raw_subagent_count >= 2 or logical_role_count >= 2 or agent_calls >= 2:
+        flags.append("agent-heavy")
+    if errors >= 2:
+        flags.append("error-heavy")
+    if verification_count >= 3:
+        flags.append("verification-heavy")
+    if edit_write_count >= 10:
+        flags.append("edit-heavy")
+    if interrupted:
+        flags.append("interrupted")
+    if signal_class == "no-op":
+        flags.append("no-op")
+    if docs_signal:
+        flags.append("docs")
+    if edit_write_count > 0:
+        flags.append("implementation")
+    if user_correction_count > 0:
+        flags.append("user-correction")
+
     return {
-        "first_intent": first_user_text_from_entries(entries),
+        "first_intent": first_intent,
         "session_kind": session_kind,
         "signal_class": signal_class,
         "substantive": signal_class == "substantive",
         "edit_write_count": edit_write_count,
         "verification_count": verification_count,
+        "verification_success_count": verification_success_count,
+        "verification_failure_count": verification_failure_count,
+        "verification_unknown_count": verification_unknown_count,
         "error_count": errors,
         "interrupted": interrupted,
         "raw_subagent_transcript_count": raw_subagent_count,
         "logical_subagent_role_count": logical_role_count,
         "logical_subagent_roles": list(logical_roles.keys()),
+        "report_flags": flags,
+        "user_correction_count": user_correction_count,
+        "wall_duration_minutes": durations["wall_duration_minutes"],
+        "active_duration_minutes": durations["active_duration_minutes"],
+        "large_idle_gap_count": durations["large_idle_gap_count"],
         "top_files": dict(list(files.items())[:8]),
         "tools": tools,
+        "tool_use_count": tool_count,
     }
 
 
-def run_packet_builder(session_file):
+def run_packet_builder(session_file, args):
     builder = os.path.join(os.path.dirname(__file__), "build-session-packet.py")
-    cmd = [sys.executable, builder, session_file]
+    cmd = [
+        sys.executable,
+        builder,
+        "--max-main-lines",
+        str(args.max_main_lines),
+        "--max-agent-lines",
+        str(args.max_agent_lines),
+        "--max-agents",
+        str(args.max_agents),
+        "--max-files",
+        str(args.max_files),
+        "--max-commands",
+        str(args.max_commands),
+        session_file,
+    ]
     output = subprocess.check_output(cmd)
     if not output:
         raise RuntimeError("packet builder produced no output for %s" % session_file)
@@ -406,6 +585,15 @@ def parse_args(argv):
     parser.add_argument("--out", default=None, help="Output run directory. Default: data/runs/<timestamp>")
     parser.add_argument("--limit", type=int, default=30, help="Maximum matching sessions to packetize. Default: 30")
     parser.add_argument("--claude-home", default=default_home, help="Claude config dir. Default: ~/.claude")
+    parser.add_argument("--exclude-noop", action="store_true", help="Do not packetize no-op sessions.")
+    parser.add_argument("--include-noop", action="store_true", help="Packetize no-op sessions. This is the default.")
+    parser.add_argument("--min-user-messages", type=int, default=0, help="Minimum user messages required for packetization.")
+    parser.add_argument("--min-tool-uses", type=int, default=0, help="Minimum assistant tool uses required for packetization.")
+    parser.add_argument("--max-main-lines", type=int, default=220, help="Maximum main timeline lines per packet.")
+    parser.add_argument("--max-agent-lines", type=int, default=120, help="Maximum subagent timeline lines per packet.")
+    parser.add_argument("--max-agents", type=int, default=0, help="Maximum subagents per packet; 0 means all.")
+    parser.add_argument("--max-files", type=int, default=30, help="Maximum files listed per packet section.")
+    parser.add_argument("--max-commands", type=int, default=20, help="Maximum commands listed per packet section.")
     parser.add_argument("patterns", nargs="+", help="cwd patterns")
     args = parser.parse_args(argv[1:])
     if args.limit < 1:
@@ -413,6 +601,52 @@ def parse_args(argv):
     if args.out is None:
         args.out = os.path.join(repo_root, "data", "runs", datetime.utcnow().strftime("%Y%m%d_%H%M%S"))
     return args
+
+
+def session_passes_filters(meta, summary, args):
+    if args.exclude_noop and summary["signal_class"] == "no-op":
+        return False
+    if args.min_user_messages > 0 and int(meta["human_users"]) < args.min_user_messages:
+        return False
+    if args.min_tool_uses > 0 and int(summary["tool_use_count"]) < args.min_tool_uses:
+        return False
+    return True
+
+
+def top_sessions(sessions, key, limit):
+    ranked = sorted(
+        [session for session in sessions if session.get(key, 0) > 0],
+        key=lambda session: (-session.get(key, 0), session.get("started", ""), session.get("session", "")),
+    )
+    return [session["session"] for session in ranked[:limit]]
+
+
+def sessions_with_flag(sessions, flag, limit):
+    ranked = [session for session in sessions if flag in session.get("report_flags", [])]
+    ranked.sort(key=lambda session: (session.get("started", ""), session.get("session", "")), reverse=True)
+    return [session["session"] for session in ranked[:limit]]
+
+
+def recommended_packets(sessions):
+    substantive = [session for session in sessions if session.get("signal_class") == "substantive"]
+    representative = [
+        session for session in substantive
+        if "agent-heavy" not in session.get("report_flags", [])
+        and "error-heavy" not in session.get("report_flags", [])
+        and "edit-heavy" not in session.get("report_flags", [])
+    ]
+    representative.sort(key=lambda session: (-session.get("verification_count", 0), session.get("started", "")))
+    noop = [session for session in sessions if session.get("signal_class") == "no-op"]
+    noop.sort(key=lambda session: session.get("started", ""), reverse=True)
+    return {
+        "agent_heavy": sessions_with_flag(sessions, "agent-heavy", 3),
+        "error_heavy": sessions_with_flag(sessions, "error-heavy", 3),
+        "edit_heavy": top_sessions(sessions, "edit_write_count", 3),
+        "verification_heavy": top_sessions(sessions, "verification_count", 3),
+        "interrupted": sessions_with_flag(sessions, "interrupted", 3),
+        "representative": [session["session"] for session in representative[:3]],
+        "noop_examples": [session["session"] for session in noop[:2]],
+    }
 
 
 def main(argv):
@@ -428,7 +662,16 @@ def main(argv):
         if meta is not None:
             matches.append(meta)
     matches.sort(key=lambda item: item.get("mtime", 0), reverse=True)
-    selected = matches[: args.limit]
+    selected_items = []
+    filtered_out = 0
+    for meta in matches:
+        summary = summarize_session(meta)
+        if not session_passes_filters(meta, summary, args):
+            filtered_out += 1
+            continue
+        selected_items.append({"meta": meta, "summary": summary})
+        if len(selected_items) >= args.limit:
+            break
 
     index_rows = []
     next_sessions = []
@@ -440,19 +683,26 @@ def main(argv):
         "low_signal": 0,
         "edit_write_count": 0,
         "verification_count": 0,
+        "verification_success_count": 0,
+        "verification_failure_count": 0,
+        "verification_unknown_count": 0,
         "error_count": 0,
         "interrupted": 0,
         "raw_subagent_transcript_count": 0,
         "logical_subagent_role_count": 0,
+        "user_correction_count": 0,
+        "active_duration_minutes": 0,
+        "large_idle_gap_count": 0,
     }
     aggregate_kinds = {}
     aggregate_files = {}
 
-    for meta in selected:
+    for item in selected_items:
+        meta = item["meta"]
+        summary = item["summary"]
         short_id = str(meta["session_id"])[:8]
         packet_path = os.path.join(packet_dir, short_id + ".md")
-        summary = summarize_session(meta)
-        packet = run_packet_builder(meta["file"])
+        packet = run_packet_builder(meta["file"], args)
         write_text(packet_path, packet)
 
         index_rows.append({"short_id": short_id, "packet": packet_path, "meta": meta, "summary": summary})
@@ -473,11 +723,19 @@ def main(argv):
             "substantive": summary["substantive"],
             "edit_write_count": summary["edit_write_count"],
             "verification_count": summary["verification_count"],
+            "verification_success_count": summary["verification_success_count"],
+            "verification_failure_count": summary["verification_failure_count"],
+            "verification_unknown_count": summary["verification_unknown_count"],
             "error_count": summary["error_count"],
             "interrupted": summary["interrupted"],
             "raw_subagent_transcript_count": summary["raw_subagent_transcript_count"],
             "logical_subagent_role_count": summary["logical_subagent_role_count"],
             "logical_subagent_roles": summary["logical_subagent_roles"],
+            "report_flags": summary["report_flags"],
+            "user_correction_count": summary["user_correction_count"],
+            "wall_duration_minutes": summary["wall_duration_minutes"],
+            "active_duration_minutes": summary["active_duration_minutes"],
+            "large_idle_gap_count": summary["large_idle_gap_count"],
             "top_files": summary["top_files"],
             "top_tools": dict(list(summary["tools"].items())[:8]),
         }
@@ -489,10 +747,16 @@ def main(argv):
         aggregate_totals["low_signal"] += 1 if summary["signal_class"] == "low-signal" else 0
         aggregate_totals["edit_write_count"] += summary["edit_write_count"]
         aggregate_totals["verification_count"] += summary["verification_count"]
+        aggregate_totals["verification_success_count"] += summary["verification_success_count"]
+        aggregate_totals["verification_failure_count"] += summary["verification_failure_count"]
+        aggregate_totals["verification_unknown_count"] += summary["verification_unknown_count"]
         aggregate_totals["error_count"] += summary["error_count"]
         aggregate_totals["interrupted"] += 1 if summary["interrupted"] else 0
         aggregate_totals["raw_subagent_transcript_count"] += summary["raw_subagent_transcript_count"]
         aggregate_totals["logical_subagent_role_count"] += summary["logical_subagent_role_count"]
+        aggregate_totals["user_correction_count"] += summary["user_correction_count"]
+        aggregate_totals["active_duration_minutes"] += summary["active_duration_minutes"]
+        aggregate_totals["large_idle_gap_count"] += summary["large_idle_gap_count"]
         aggregate_kinds[summary["session_kind"]] = aggregate_kinds.get(summary["session_kind"], 0) + 1
         for file_path, count in summary["top_files"].items():
             aggregate_files[file_path] = aggregate_files.get(file_path, 0) + count
@@ -508,10 +772,12 @@ def main(argv):
             "human_users": meta["human_users"],
             "raw_subagent_transcript_count": summary["raw_subagent_transcript_count"],
             "logical_subagent_role_count": summary["logical_subagent_role_count"],
+            "report_flags": summary["report_flags"],
         })
 
     aggregate_kinds = sort_counts(aggregate_kinds)
     aggregate_files = sort_counts(aggregate_files)
+    packet_recommendations = recommended_packets(aggregate_sessions)
 
     index = []
     index.append("# Claude Insights Run Index\n")
@@ -520,7 +786,9 @@ def main(argv):
     index.append("- Patterns: `%s`" % "`, `".join(args.patterns))
     index.append("- Expanded directories: %s" % ("none" if len(targets["dirs"]) == 0 else len(targets["dirs"])))
     index.append("- Matching sessions found: %s" % len(matches))
-    index.append("- Sessions packetized: %s" % len(selected))
+    index.append("- Sessions packetized: %s" % len(selected_items))
+    if filtered_out:
+        index.append("- Sessions filtered out before limit: %s" % filtered_out)
     index.append("- Aggregate JSON: `%s`" % os.path.join(out_dir, "aggregate.json"))
     index.append("- Output directory: `%s`\n" % out_dir)
 
@@ -532,19 +800,30 @@ def main(argv):
         aggregate_totals["no_op"],
     ))
     index.append("- Edit/write count: %s" % aggregate_totals["edit_write_count"])
-    index.append("- Verification count: %s" % aggregate_totals["verification_count"])
+    index.append("- Verification count: %s (success %s, failure %s, unknown %s)" % (
+        aggregate_totals["verification_count"],
+        aggregate_totals["verification_success_count"],
+        aggregate_totals["verification_failure_count"],
+        aggregate_totals["verification_unknown_count"],
+    ))
     index.append("- Error count: %s" % aggregate_totals["error_count"])
     index.append("- Interrupted sessions: %s" % aggregate_totals["interrupted"])
+    index.append("- User correction signals: %s" % aggregate_totals["user_correction_count"])
+    index.append("- Active duration minutes: %s" % aggregate_totals["active_duration_minutes"])
     index.append("- Raw subagent transcripts: %s" % aggregate_totals["raw_subagent_transcript_count"])
     index.append("- Logical subagent roles: %s" % aggregate_totals["logical_subagent_role_count"])
     index.append("- Top files: %s\n" % format_counts(dict(list(aggregate_files.items())[:8])))
+    index.append("## Recommended Packets\n")
+    for name, sessions in packet_recommendations.items():
+        index.append("- %s: %s" % (name, ", ".join("`%s`" % session for session in sessions) if sessions else "none"))
+    index.append("")
 
     index.append("## Packetized Sessions\n")
     if not index_rows:
         index.append("_No matching sessions found._")
     else:
-        index.append("| Session | Started | Kind | Signal | First intent | Edit/write | Verify | Errors | Interrupted | Raw subagents | Logical roles | Top files | Packet |")
-        index.append("|---|---:|---|---|---|---:|---:|---:|---|---:|---:|---|---|")
+        index.append("| Session | Started | Kind | Signal | Flags | First intent | Edit/write | Verify | Errors | Interrupted | Raw subagents | Logical roles | Active min | Top files | Packet |")
+        index.append("|---|---:|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---|---|")
         for row in index_rows:
             meta = row["meta"]
             summary = row["summary"]
@@ -553,11 +832,12 @@ def main(argv):
                 top_files.append("%s %s" % (compact_path(file_path), count))
             files = md_cell("none" if not top_files else ", ".join(top_files))
             interrupted = "yes" if summary["interrupted"] else "no"
-            index.append("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |" % (
+            index.append("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |" % (
                 row["short_id"],
                 meta["first_ts"],
                 summary["session_kind"],
                 summary["signal_class"],
+                md_cell(", ".join(summary["report_flags"]) if summary["report_flags"] else "none"),
                 md_cell(summary["first_intent"]),
                 summary["edit_write_count"],
                 summary["verification_count"],
@@ -565,6 +845,7 @@ def main(argv):
                 interrupted,
                 summary["raw_subagent_transcript_count"],
                 summary["logical_subagent_role_count"],
+                summary["active_duration_minutes"],
                 files,
                 row["packet"],
             ))
@@ -587,10 +868,24 @@ def main(argv):
         "patterns": args.patterns,
         "expanded_directory_count": len(targets["dirs"]),
         "matching_session_count": len(matches),
-        "packet_count": len(selected),
+        "packet_count": len(selected_items),
+        "filtered_out_count": filtered_out,
+        "filters": {
+            "exclude_noop": bool(args.exclude_noop),
+            "min_user_messages": args.min_user_messages,
+            "min_tool_uses": args.min_tool_uses,
+        },
+        "packet_options": {
+            "max_main_lines": args.max_main_lines,
+            "max_agent_lines": args.max_agent_lines,
+            "max_agents": args.max_agents,
+            "max_files": args.max_files,
+            "max_commands": args.max_commands,
+        },
         "totals": aggregate_totals,
         "session_kinds": aggregate_kinds,
         "top_files": dict(list(aggregate_files.items())[:20]),
+        "recommended_packets": packet_recommendations,
         "sessions": aggregate_sessions,
     }
     write_json(os.path.join(out_dir, "aggregate.json"), aggregate)
@@ -599,7 +894,7 @@ def main(argv):
         "index": os.path.join(out_dir, "index.md"),
         "aggregate": os.path.join(out_dir, "aggregate.json"),
         "output_dir": out_dir,
-        "packet_count": len(selected),
+        "packet_count": len(selected_items),
         "matching_session_count": len(matches),
         "patterns": args.patterns,
         "sessions": next_sessions,
