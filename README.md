@@ -149,6 +149,9 @@ data/runs/<timestamp>/
 
 Then ask your assistant to read `aggregate.json` and `index.md`, selectively
 read packet files, and write `report.md` in the same run directory.
+Avoid ad hoc `python -c` or Python heredocs for inspecting generated JSON; read
+`aggregate.json` directly, or promote repeated transformations into a named
+helper script under `bin/`.
 The `Read` tool has a 25000-token limit. For packets with significant
 non-ASCII (multibyte) text this is reached around ~40KB or ~700 lines; ASCII-
 heavy packets fit more text per token, so these limits are conservative.
@@ -233,6 +236,8 @@ and end of the file to confirm it is complete.
   `--limit` to control how many recent matching sessions are packetized.
 - For larger limits, read `aggregate.json` and `index.md` first, then open
   substantive packets before sampling low-signal or no-op sessions.
+- Avoid ad hoc `python -c` or Python heredocs for JSON inspection; use direct
+  reads, shell text tools for simple lookups, or named helper scripts.
 - Packet files often exceed the Read 25000-token cap (roughly 40KB / 700 lines)
   and a few sessions can reach multi-megabyte. Read targeted sections or bounded
   line ranges instead of opening flagged packets in full.

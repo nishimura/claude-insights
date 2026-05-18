@@ -75,6 +75,17 @@ Useful optional flags:
 7. After writing `report.md`, verify that the expected section headings exist
    and read the beginning and end of the file to confirm it is complete.
 
+Do not use ad hoc `python -c`, `python3 -c`, or Python heredocs from Bash just
+to inspect `aggregate.json` or `index.md`. Prefer reading those files directly.
+If `aggregate.json` itself exceeds the per-call Read token limit (typical for
+runs of 10+ sessions, where the file can reach 100KB+), read it in bounded
+`offset`/`limit` ranges (for example, the `totals` and `subagent_role_stats`
+header first, then targeted slices of the `sessions` array) rather than falling
+back to ad hoc `python3 -c`. The per-call Read limit is independent of the
+session context window, so a few bounded reads cost almost no context.
+If a repeated JSON transformation becomes necessary, add a named helper script
+under `bin/` so the behavior is reviewable and reusable.
+
 For `brief`, open only the strongest recommended packets, usually 2-4 packets.
 For `detailed`, use more of `recommended_packets`, but do not open every entry
 in parallel. Skip sessions whose signals are already covered by an earlier

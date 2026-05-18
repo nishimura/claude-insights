@@ -1388,6 +1388,7 @@ def main(argv):
     index.append("- Start from `aggregate.json` and this index before opening packets.")
     index.append("- Treat `raw_subagent_transcript_count` as storage/transcript count and `logical_subagent_role_count` as the distinct delegated role labels observed in parent tool calls.")
     index.append("- Treat subagent tool counts as de-duplicated by tool_use ID. Prefer subagent active union minutes for elapsed role activity; cumulative minutes can include resumed transcript context.")
+    index.append("- Avoid ad hoc `python -c` or Python heredocs for inspecting generated JSON; read `aggregate.json` directly or add a named helper script under `bin/` for repeated transformations.")
     index.append("- For packets listed under Large Packets, do not full-read the file. Use bounded ranges around Metadata, Main Signals, Agent Activity, Notable Tool Results, or grep/find first.")
     index.append("- In `detailed` mode, do not open every `Recommended Packets` entry in parallel. Skip sessions whose signals are already covered, and target roughly 50-80K tokens of total opened packet content.")
     index.append("- Prefer substantive sessions for first-pass packet reading; sample no-op or low-signal sessions only when explaining noise or interruptions.")
