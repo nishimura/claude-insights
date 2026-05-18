@@ -17,6 +17,8 @@ except ImportError:
 
 INTENT_CLIP = 140
 IDLE_GAP_SECONDS = 30 * 60
+LARGE_PACKET_BYTES = 256 * 1024
+VERY_LARGE_PACKET_BYTES = 1024 * 1024
 USER_CORRECTION_RE = re.compile(
     r"(wrong|not right|try again|not what i meant|instead|again)",
     re.IGNORECASE,
@@ -384,6 +386,66 @@ def format_counts(counts):
     return ", ".join("%s %s" % (name, count) for name, count in counts.items())
 
 
+def packet_read_strategy(size_bytes, line_count):
+    if size_bytes >= VERY_LARGE_PACKET_BYTES:
+        return "very-large: read index/aggregate first, then targeted line ranges only"
+    if size_bytes >= LARGE_PACKET_BYTES:
+        return "large: avoid full read; use bounded ranges around relevant sections"
+    if line_count > 1200:
+        return "long: prefer section/range reads"
+    return "normal: selected full read is usually acceptable"
+
+
+def interval_union_minutes(intervals):
+    cleaned = []
+    for start, end in intervals:
+        if start is None or end is None:
+            continue
+        if end < start:
+            start, end = end, start
+        cleaned.append((start, end))
+    if not cleaned:
+        return 0
+    cleaned.sort()
+    total = 0
+    current_start, current_end = cleaned[0]
+    for start, end in cleaned[1:]:
+        if start <= current_end:
+            current_end = max(current_end, end)
+        else:
+            total += current_end - current_start
+            current_start, current_end = start, end
+    total += current_end - current_start
+    return int(round(total / 60.0))
+
+
+def transcript_interval(entries):
+    timestamps = []
+    for entry in entries:
+        epoch = timestamp_to_epoch(entry.get("timestamp"))
+        if epoch is not None:
+            timestamps.append(epoch)
+    if not timestamps:
+        return (None, None)
+    return (min(timestamps), max(timestamps))
+
+
+def transcript_active_intervals(entries):
+    timestamps = []
+    for entry in entries:
+        epoch = timestamp_to_epoch(entry.get("timestamp"))
+        if epoch is not None:
+            timestamps.append(epoch)
+    timestamps = sorted(set(timestamps))
+    intervals = []
+    for idx in range(1, len(timestamps)):
+        start = timestamps[idx - 1]
+        end = timestamps[idx]
+        if end >= start and end - start <= IDLE_GAP_SECONDS:
+            intervals.append((start, end))
+    return intervals
+
+
 def summarize_session(meta):
     entries = read_jsonl_lenient(meta["file"])
     tools = {}
@@ -554,23 +616,76 @@ def summarize_session(meta):
     }
 
 
-def extract_subagent_role(entries, fallback):
+def parent_agent_launches(parent_entries):
+    launches = []
+    for entry in parent_entries:
+        content = entry.get("message", {}).get("content")
+        if entry.get("type") != "assistant" or not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") not in ("Agent", "Task"):
+                continue
+            input_data = block.get("input")
+            if not isinstance(input_data, dict):
+                continue
+            label = role_label_from_agent_input(input_data)
+            prompt = input_data.get("prompt")
+            if label and isinstance(prompt, str) and prompt.strip():
+                launches.append({
+                    "label": label,
+                    "prompt": " ".join(prompt.split()),
+                })
+    return launches
+
+
+def extract_ascii_quoted_label(text):
+    for value in re.findall(r"\u300c([A-Za-z][A-Za-z0-9_.-]{1,79})\u300d", text):
+        lowered = value.lower()
+        if lowered not in ("team", "task", "agent") and "issue" not in lowered:
+            return value
+    return ""
+
+
+def extract_subagent_role(entries, fallback, launches):
+    first_text = ""
     for entry in entries:
         if entry.get("type") != "user":
             continue
         text = text_from_content(entry.get("message", {}).get("content"))
         if not text.strip():
             continue
-        match = re.search(r"「([^」]{1,80})」というメンバー", text)
-        if match:
-            return clip_text(match.group(1), 80)
+        first_text = " ".join(text.split())
+        quoted = extract_ascii_quoted_label(text)
+        if quoted:
+            return clip_text(quoted, 80)
+        for launch in launches:
+            prompt = launch["prompt"]
+            if prompt and (first_text.startswith(prompt[:200]) or prompt[:200] in first_text):
+                return launch["label"]
         match = re.search(r"member(?:\s+name)?\s*[:=]\s*([A-Za-z0-9_.-]{1,80})", text, re.IGNORECASE)
         if match:
             return clip_text(match.group(1), 80)
         match = re.search(r"role\s*[:=]\s*([A-Za-z0-9_.-]{1,80})", text, re.IGNORECASE)
         if match:
             return clip_text(match.group(1), 80)
+        match = re.search(r"<teammate-message[^>]*\bsummary=\"([^\"]{1,80})\"", text)
+        if match:
+            return clip_text(match.group(1), 80)
         break
+    if first_text:
+        best = None
+        best_score = 0
+        first_words = set(first_text.lower().split())
+        for launch in launches:
+            prompt_words = set(launch["prompt"].lower().split())
+            score = len(first_words.intersection(prompt_words))
+            if score > best_score:
+                best = launch["label"]
+                best_score = score
+        if best and best_score >= 8:
+            return best
     return fallback
 
 
@@ -669,16 +784,22 @@ def summarize_subagents(meta):
         "verification_unknown_count": 0,
         "send_message_count": 0,
         "active_duration_minutes": 0,
+        "active_minutes_cumulative": 0,
+        "active_minutes_union": 0,
+        "wall_range_minutes": 0,
     }
     by_role = {}
     seen_tool_uses = set()
     seen_tool_results = set()
+    all_wall_intervals = []
+    all_active_intervals = []
+    launches = parent_agent_launches(read_jsonl_lenient(meta["file"]))
     for agent_file in discover_subagent_files(meta["file"], meta["session_id"]):
         entries = read_jsonl_lenient(agent_file)
         if not entries:
             continue
         fallback = os.path.splitext(os.path.basename(agent_file))[0]
-        role = extract_subagent_role(entries, fallback)
+        role = extract_subagent_role(entries, fallback, launches)
         stats = summarize_transcript_entries(entries, seen_tool_uses, seen_tool_results)
         role_stats = by_role.setdefault(role, {
             "transcript_count": 0,
@@ -690,7 +811,12 @@ def summarize_subagents(meta):
             "verification_unknown_count": 0,
             "send_message_count": 0,
             "active_duration_minutes": 0,
+            "active_minutes_cumulative": 0,
+            "active_minutes_union": 0,
+            "wall_range_minutes": 0,
             "top_tools": {},
+            "_active_intervals": [],
+            "_wall_intervals": [],
         })
         role_stats["transcript_count"] += 1
         role_stats["error_count"] += stats["error_count"]
@@ -701,6 +827,14 @@ def summarize_subagents(meta):
         role_stats["verification_unknown_count"] += stats["verification_unknown_count"]
         role_stats["send_message_count"] += stats["send_message_count"]
         role_stats["active_duration_minutes"] += stats["active_duration_minutes"]
+        role_stats["active_minutes_cumulative"] += stats["active_duration_minutes"]
+        wall_interval = transcript_interval(entries)
+        active_intervals = transcript_active_intervals(entries)
+        if wall_interval[0] is not None:
+            role_stats["_wall_intervals"].append(wall_interval)
+            all_wall_intervals.append(wall_interval)
+        role_stats["_active_intervals"].extend(active_intervals)
+        all_active_intervals.extend(active_intervals)
         for name, count in stats["tools"].items():
             role_stats["top_tools"][name] = role_stats["top_tools"].get(name, 0) + count
 
@@ -713,9 +847,22 @@ def summarize_subagents(meta):
         totals["verification_unknown_count"] += stats["verification_unknown_count"]
         totals["send_message_count"] += stats["send_message_count"]
         totals["active_duration_minutes"] += stats["active_duration_minutes"]
+        totals["active_minutes_cumulative"] += stats["active_duration_minutes"]
 
     for role in list(by_role.keys()):
         by_role[role]["top_tools"] = dict(list(sort_counts(by_role[role]["top_tools"]).items())[:8])
+        active_intervals = by_role[role].pop("_active_intervals", [])
+        wall_intervals = by_role[role].pop("_wall_intervals", [])
+        by_role[role]["active_minutes_union"] = interval_union_minutes(active_intervals)
+        if wall_intervals:
+            starts = [interval[0] for interval in wall_intervals if interval[0] is not None]
+            ends = [interval[1] for interval in wall_intervals if interval[1] is not None]
+            by_role[role]["wall_range_minutes"] = int(round((max(ends) - min(starts)) / 60.0)) if starts and ends else 0
+    totals["active_minutes_union"] = interval_union_minutes(all_active_intervals)
+    if all_wall_intervals:
+        starts = [interval[0] for interval in all_wall_intervals if interval[0] is not None]
+        ends = [interval[1] for interval in all_wall_intervals if interval[1] is not None]
+        totals["wall_range_minutes"] = int(round((max(ends) - min(starts)) / 60.0)) if starts and ends else 0
     return {"totals": totals, "by_role": by_role}
 
 
@@ -834,6 +981,8 @@ def recommended_packets(sessions):
     representative.sort(key=lambda session: (-session.get("combined_verification_count", session.get("verification_count", 0)), session.get("started", "")))
     noop = [session for session in sessions if session.get("signal_class") == "no-op"]
     noop.sort(key=lambda session: session.get("started", ""), reverse=True)
+    large_packets = [session for session in sessions if session.get("large_packet")]
+    large_packets.sort(key=lambda session: (-session.get("packet_size_bytes", 0), session.get("session", "")))
     return {
         "agent_heavy": sessions_with_flag(sessions, "agent-heavy", 3),
         "error_heavy": sessions_with_flag(sessions, "error-heavy", 3),
@@ -842,6 +991,7 @@ def recommended_packets(sessions):
         "interrupted": sessions_with_flag(sessions, "interrupted", 3),
         "representative": [session["session"] for session in representative[:3]],
         "noop_examples": [session["session"] for session in noop[:2]],
+        "large_packets": [session["session"] for session in large_packets[:5]],
     }
 
 
@@ -916,7 +1066,12 @@ def main(argv):
         "user_correction_count": 0,
         "active_duration_minutes": 0,
         "subagent_active_duration_minutes": 0,
+        "subagent_active_minutes_cumulative": 0,
+        "subagent_active_minutes_union": 0,
+        "subagent_wall_range_minutes": 0,
         "large_idle_gap_count": 0,
+        "large_packet_count": 0,
+        "very_large_packet_count": 0,
     }
     aggregate_kinds = {}
     aggregate_files = {}
@@ -929,6 +1084,16 @@ def main(argv):
         packet_path = os.path.join(packet_dir, short_id + ".md")
         packet = run_packet_builder(meta["file"], args)
         write_text(packet_path, packet)
+        packet_size_bytes = len(packet.encode("utf-8"))
+        packet_line_count = packet.count("\n") + (0 if packet.endswith("\n") else 1)
+        packet_large = packet_size_bytes >= LARGE_PACKET_BYTES
+        packet_very_large = packet_size_bytes >= VERY_LARGE_PACKET_BYTES
+        packet_strategy = packet_read_strategy(packet_size_bytes, packet_line_count)
+        summary["packet_size_bytes"] = packet_size_bytes
+        summary["packet_line_count"] = packet_line_count
+        summary["large_packet"] = packet_large
+        summary["very_large_packet"] = packet_very_large
+        summary["suggested_read_strategy"] = packet_strategy
 
         index_rows.append({"short_id": short_id, "packet": packet_path, "meta": meta, "summary": summary})
         agent_calls = summary["tools"].get("Agent", 0) + summary["tools"].get("Task", 0)
@@ -970,11 +1135,19 @@ def main(argv):
             "logical_subagent_roles": summary["logical_subagent_roles"],
             "subagent_role_stats": summary["subagents"]["by_role"],
             "subagent_send_message_count": subagent_totals["send_message_count"],
+            "subagent_active_minutes_cumulative": subagent_totals["active_minutes_cumulative"],
+            "subagent_active_minutes_union": subagent_totals["active_minutes_union"],
+            "subagent_wall_range_minutes": subagent_totals["wall_range_minutes"],
             "report_flags": summary["report_flags"],
             "user_correction_count": summary["user_correction_count"],
             "wall_duration_minutes": summary["wall_duration_minutes"],
             "active_duration_minutes": summary["active_duration_minutes"],
             "large_idle_gap_count": summary["large_idle_gap_count"],
+            "packet_size_bytes": packet_size_bytes,
+            "packet_line_count": packet_line_count,
+            "large_packet": packet_large,
+            "very_large_packet": packet_very_large,
+            "suggested_read_strategy": packet_strategy,
             "top_files": summary["top_files"],
             "top_tools": dict(list(summary["tools"].items())[:8]),
         }
@@ -1008,7 +1181,12 @@ def main(argv):
         aggregate_totals["user_correction_count"] += summary["user_correction_count"]
         aggregate_totals["active_duration_minutes"] += summary["active_duration_minutes"]
         aggregate_totals["subagent_active_duration_minutes"] += subagent_totals["active_duration_minutes"]
+        aggregate_totals["subagent_active_minutes_cumulative"] += subagent_totals["active_minutes_cumulative"]
+        aggregate_totals["subagent_active_minutes_union"] += subagent_totals["active_minutes_union"]
+        aggregate_totals["subagent_wall_range_minutes"] += subagent_totals["wall_range_minutes"]
         aggregate_totals["large_idle_gap_count"] += summary["large_idle_gap_count"]
+        aggregate_totals["large_packet_count"] += 1 if packet_large else 0
+        aggregate_totals["very_large_packet_count"] += 1 if packet_very_large else 0
         aggregate_kinds[summary["session_kind"]] = aggregate_kinds.get(summary["session_kind"], 0) + 1
         for file_path, count in summary["top_files"].items():
             aggregate_files[file_path] = aggregate_files.get(file_path, 0) + count
@@ -1022,6 +1200,9 @@ def main(argv):
                 "verification_unknown_count": 0,
                 "send_message_count": 0,
                 "active_duration_minutes": 0,
+                "active_minutes_cumulative": 0,
+                "active_minutes_union": 0,
+                "wall_range_minutes": 0,
             })
             for key in existing:
                 existing[key] += role_stats.get(key, 0)
@@ -1037,6 +1218,10 @@ def main(argv):
             "human_users": meta["human_users"],
             "raw_subagent_transcript_count": summary["raw_subagent_transcript_count"],
             "logical_subagent_role_count": summary["logical_subagent_role_count"],
+            "packet_size_bytes": packet_size_bytes,
+            "packet_line_count": packet_line_count,
+            "large_packet": packet_large,
+            "suggested_read_strategy": packet_strategy,
             "report_flags": summary["report_flags"],
         })
 
@@ -1096,22 +1281,48 @@ def main(argv):
     index.append("- Subagent interruptions: %s" % aggregate_totals["subagent_interrupted_count"])
     index.append("- User correction signals: %s" % aggregate_totals["user_correction_count"])
     index.append("- Active duration minutes: %s" % aggregate_totals["active_duration_minutes"])
+    index.append("- Subagent active minutes: cumulative %s, union %s, wall range %s" % (
+        aggregate_totals["subagent_active_minutes_cumulative"],
+        aggregate_totals["subagent_active_minutes_union"],
+        aggregate_totals["subagent_wall_range_minutes"],
+    ))
     index.append("- Raw subagent transcripts: %s" % aggregate_totals["raw_subagent_transcript_count"])
     index.append("- Logical subagent roles: %s" % aggregate_totals["logical_subagent_role_count"])
     index.append("- Subagent SendMessage count: %s" % aggregate_totals["subagent_send_message_count"])
+    index.append("- Large packets: %s (very large %s)" % (
+        aggregate_totals["large_packet_count"],
+        aggregate_totals["very_large_packet_count"],
+    ))
     index.append("- Top files: %s\n" % format_counts(dict(list(aggregate_files.items())[:8])))
     if aggregate_subagent_roles:
         index.append("## Subagent Role Stats\n")
-        index.append("| Role | Transcripts | Verify | Errors | SendMessage | Active min |")
-        index.append("|---|---:|---:|---:|---:|---:|")
+        index.append("| Role | Transcripts | Verify | Errors | SendMessage | Active cum | Active union | Wall range |")
+        index.append("|---|---:|---:|---:|---:|---:|---:|---:|")
         for role, stats in list(aggregate_subagent_roles.items())[:20]:
-            index.append("| %s | %s | %s | %s | %s | %s |" % (
+            index.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
                 md_cell(role),
                 stats["transcript_count"],
                 stats["verification_count"],
                 stats["error_count"],
                 stats["send_message_count"],
-                stats["active_duration_minutes"],
+                stats["active_minutes_cumulative"],
+                stats["active_minutes_union"],
+                stats["wall_range_minutes"],
+            ))
+        index.append("")
+    large_rows = [row for row in index_rows if row["summary"].get("packet_size_bytes", 0) >= LARGE_PACKET_BYTES]
+    if large_rows:
+        index.append("## Large Packets\n")
+        index.append("| Session | Size KB | Lines | Read strategy | Packet |")
+        index.append("|---|---:|---:|---|---|")
+        for row in sorted(large_rows, key=lambda r: -r["summary"].get("packet_size_bytes", 0))[:20]:
+            summary = row["summary"]
+            index.append("| `%s` | %s | %s | %s | `%s` |" % (
+                row["short_id"],
+                int(round(summary["packet_size_bytes"] / 1024.0)),
+                summary["packet_line_count"],
+                md_cell(summary["suggested_read_strategy"]),
+                row["packet"],
             ))
         index.append("")
     index.append("## Recommended Packets\n")
@@ -1123,8 +1334,8 @@ def main(argv):
     if not index_rows:
         index.append("_No matching sessions found._")
     else:
-        index.append("| Session | Started | Kind | Signal | Flags | First intent | Edit/write | Verify main/sub | Errors main/sub | Interrupted | Raw subagents | Logical roles | Active min | Top files | Packet |")
-        index.append("|---|---:|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---|---|")
+        index.append("| Session | Started | Kind | Signal | Flags | First intent | Edit/write | Verify main/sub | Errors main/sub | Interrupted | Raw subagents | Logical roles | Active min | Packet KB/lines | Top files | Packet |")
+        index.append("|---|---:|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|---|---|")
         for row in index_rows:
             meta = row["meta"]
             summary = row["summary"]
@@ -1133,7 +1344,11 @@ def main(argv):
                 top_files.append("%s %s" % (compact_path(file_path), count))
             files = md_cell("none" if not top_files else ", ".join(top_files))
             interrupted = "yes" if summary["interrupted"] else "no"
-            index.append("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |" % (
+            packet_label = "%s/%s" % (
+                int(round(summary.get("packet_size_bytes", 0) / 1024.0)),
+                summary.get("packet_line_count", 0),
+            )
+            index.append("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |" % (
                 row["short_id"],
                 meta["first_ts"],
                 summary["session_kind"],
@@ -1147,6 +1362,7 @@ def main(argv):
                 summary["raw_subagent_transcript_count"],
                 summary["logical_subagent_role_count"],
                 summary["active_duration_minutes"],
+                packet_label,
                 files,
                 row["packet"],
             ))
@@ -1154,7 +1370,8 @@ def main(argv):
     index.append("\n## Report Guidance\n")
     index.append("- Start from `aggregate.json` and this index before opening packets.")
     index.append("- Treat `raw_subagent_transcript_count` as storage/transcript count and `logical_subagent_role_count` as the distinct delegated role labels observed in parent tool calls.")
-    index.append("- Treat subagent tool counts as de-duplicated by tool_use ID; subagent active minutes are cumulative transcript time and can still include repeated context from resumed agents.")
+    index.append("- Treat subagent tool counts as de-duplicated by tool_use ID. Prefer subagent active union minutes for elapsed role activity; cumulative minutes can include resumed transcript context.")
+    index.append("- For packets listed under Large Packets, do not full-read the file. Use bounded ranges around Metadata, Main Signals, Agent Activity, Notable Tool Results, or grep/find first.")
     index.append("- Prefer substantive sessions for first-pass packet reading; sample no-op or low-signal sessions only when explaining noise or interruptions.")
     index.append("- Analyze main-session coordination separately from subagent activity.")
     index.append("- Report delegation patterns, friction, useful agent workflows, and missed opportunities.")
@@ -1203,7 +1420,7 @@ def main(argv):
         "patterns": args.patterns,
         "session_id_filter": args.session_id,
         "sessions": next_sessions,
-        "suggested_next_step": "Read aggregate.json and index.md, then selectively read packet files to write report.md in this output directory.",
+        "suggested_next_step": "Read aggregate.json and index.md, inspect packet size metadata, selectively read packet files, write report.md, then verify report headings and the beginning/end of the file.",
     }
     write_json(os.path.join(out_dir, "next-action.json"), next_action)
 

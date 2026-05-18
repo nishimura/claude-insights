@@ -72,6 +72,8 @@ Useful optional flags:
 4. Open only selected `packets/*.md`; do not read every packet blindly.
 5. Preserve the distinction between main-session behavior and subagent behavior.
 6. Write `report.md` in the generated output directory.
+7. After writing `report.md`, verify that the expected section headings exist
+   and read the beginning and end of the file to confirm it is complete.
 
 For `brief`, open only the strongest recommended packets, usually 2-4 packets.
 For `detailed`, use more of `recommended_packets`, but still avoid opening every
@@ -81,6 +83,10 @@ Packet files can be very large. Before opening a packet, prefer `index.md` and
 `aggregate.json` metadata. When a packet may be large, read only targeted
 sections or bounded line ranges. Do not attempt a full read of multi-megabyte
 packet files.
+
+Use `packet_size_bytes`, `packet_line_count`, `large_packet`, and
+`suggested_read_strategy` from `aggregate.json` and the `Large Packets` index
+section before opening packet files.
 
 ## Packet Selection
 
@@ -111,9 +117,9 @@ logical roles come from parent delegation labels.
 Also inspect `subagent_role_stats`, `subagent_*`, and `combined_*` fields in
 `aggregate.json`. The legacy `verification_count` and `error_count` fields are
 main-session counts; subagent verification and errors are reported separately.
-Subagent tool counts are de-duplicated by tool_use ID, but subagent active
-minutes are cumulative transcript time and can still include repeated context
-from resumed agents.
+Subagent tool counts are de-duplicated by tool_use ID. Prefer
+`active_minutes_union` for elapsed role activity; `active_minutes_cumulative`
+can include repeated context from resumed agents.
 
 ## Report Shape
 
