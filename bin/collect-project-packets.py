@@ -10,6 +10,10 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+try:
+    from html import unescape as html_unescape
+except ImportError:
+    html_unescape = None
 
 INTENT_CLIP = 140
 
@@ -66,6 +70,41 @@ def is_synthetic_user_text(text):
     )
 
 
+def extract_xml_tag(text, tag):
+    match = re.search(r"<%s>(.*?)</%s>" % (tag, tag), text, re.DOTALL)
+    if not match:
+        return ""
+    value = " ".join(match.group(1).strip().split())
+    if html_unescape is not None:
+        value = html_unescape(value)
+    return value
+
+
+def format_command_intent(text):
+    trimmed = text.strip()
+    command_name = extract_xml_tag(trimmed, "command-name")
+    if not command_name:
+        return ""
+    if command_name in ("/clear", "/exit"):
+        return ""
+
+    command_args = extract_xml_tag(trimmed, "command-args")
+    command_message = extract_xml_tag(trimmed, "command-message")
+    parts = [command_name]
+    if command_args:
+        parts.append(command_args)
+    elif command_message and command_message != command_name.lstrip("/"):
+        parts.append(command_message)
+    return clip_text(" ".join(parts), INTENT_CLIP)
+
+
+def format_intent_text(text):
+    command_intent = format_command_intent(text)
+    if command_intent:
+        return command_intent
+    return clip_text(text, INTENT_CLIP)
+
+
 def compact_path(path):
     parts = [part for part in path.split("/") if part]
     if len(parts) <= 3:
@@ -100,7 +139,7 @@ def first_user_text_from_entries(entries):
         if isinstance(content, str) and content.strip():
             if is_synthetic_user_text(content):
                 continue
-            return clip_text(content, INTENT_CLIP)
+            return format_intent_text(content)
         if isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -108,7 +147,7 @@ def first_user_text_from_entries(entries):
                     if text.strip():
                         if is_synthetic_user_text(text):
                             continue
-                        return clip_text(text, INTENT_CLIP)
+                        return format_intent_text(text)
     return ""
 
 
