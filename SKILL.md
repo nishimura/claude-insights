@@ -76,17 +76,25 @@ Useful optional flags:
    and read the beginning and end of the file to confirm it is complete.
 
 For `brief`, open only the strongest recommended packets, usually 2-4 packets.
-For `detailed`, use more of `recommended_packets`, but still avoid opening every
-packet unless needed.
+For `detailed`, use more of `recommended_packets`, but do not open every entry
+in parallel. Skip sessions whose signals are already covered by an earlier
+packet, and target roughly 50-80K tokens of total opened packet content.
 
-Packet files can be very large. Before opening a packet, prefer `index.md` and
-`aggregate.json` metadata. When a packet may be large, read only targeted
-sections or bounded line ranges. Do not attempt a full read of multi-megabyte
-packet files.
+The `Read` tool has a 25000-token limit. Non-ASCII (multibyte) text consumes
+roughly 2 bytes per token, so a packet with significant non-ASCII content at
+or above ~40KB or ~700 lines can truncate on a full read. Pure-ASCII packets
+fit more text per token, so these limits are conservative. Before opening any
+packet:
 
-Use `packet_size_bytes`, `packet_line_count`, `large_packet`, and
-`suggested_read_strategy` from `aggregate.json` and the `Large Packets` index
-section before opening packet files.
+1. Check `packet_size_bytes`, `packet_line_count`, `large_packet`,
+   `very_large_packet`, and `suggested_read_strategy` for that session in
+   `aggregate.json`, and the `Large Packets` index section.
+2. If `large_packet` is true, do not full-read. Use `offset`/`limit` to read
+   bounded ranges around the relevant headings (Metadata, Main Signals, Notable
+   Tool Results, Agent Activity) or use `grep` for targeted lookups.
+3. Treat the `Large Packets` index list as the authoritative blocklist for
+   full reads; the per-session `suggested_read_strategy` string repeats the
+   same signal.
 
 ## Packet Selection
 

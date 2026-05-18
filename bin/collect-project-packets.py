@@ -17,8 +17,14 @@ except ImportError:
 
 INTENT_CLIP = 140
 IDLE_GAP_SECONDS = 30 * 60
-LARGE_PACKET_BYTES = 256 * 1024
-VERY_LARGE_PACKET_BYTES = 1024 * 1024
+# Empirical thresholds calibrated to the Read tool's 25000-token cap. Packets
+# with significant non-ASCII (multibyte) text use roughly 2 bytes per token; a
+# packet at or above ~40KB / ~700 lines can truncate on a full Read and must be
+# opened with offset/limit or grep. Pure-ASCII packets fit more text per token,
+# so these limits are conservative for non-ASCII-heavy transcripts.
+LARGE_PACKET_BYTES = 40 * 1024
+LARGE_PACKET_LINES = 700
+VERY_LARGE_PACKET_BYTES = 256 * 1024
 USER_CORRECTION_RE = re.compile(
     r"(wrong|not right|try again|not what i meant|instead|again)",
     re.IGNORECASE,
@@ -388,12 +394,10 @@ def format_counts(counts):
 
 def packet_read_strategy(size_bytes, line_count):
     if size_bytes >= VERY_LARGE_PACKET_BYTES:
-        return "very-large: read index/aggregate first, then targeted line ranges only"
-    if size_bytes >= LARGE_PACKET_BYTES:
-        return "large: avoid full read; use bounded ranges around relevant sections"
-    if line_count > 1200:
-        return "long: prefer section/range reads"
-    return "normal: selected full read is usually acceptable"
+        return "very-large: do not full-read; use targeted offset/limit ranges or grep only"
+    if size_bytes >= LARGE_PACKET_BYTES or line_count >= LARGE_PACKET_LINES:
+        return "large: full read may exceed the Read 25000-token cap; use offset/limit or grep"
+    return "normal: full read should fit within the Read 25000-token cap"
 
 
 def interval_union_minutes(intervals):
@@ -1086,7 +1090,10 @@ def main(argv):
         write_text(packet_path, packet)
         packet_size_bytes = len(packet.encode("utf-8"))
         packet_line_count = packet.count("\n") + (0 if packet.endswith("\n") else 1)
-        packet_large = packet_size_bytes >= LARGE_PACKET_BYTES
+        packet_large = (
+            packet_size_bytes >= LARGE_PACKET_BYTES
+            or packet_line_count >= LARGE_PACKET_LINES
+        )
         packet_very_large = packet_size_bytes >= VERY_LARGE_PACKET_BYTES
         packet_strategy = packet_read_strategy(packet_size_bytes, packet_line_count)
         summary["packet_size_bytes"] = packet_size_bytes
@@ -1310,9 +1317,19 @@ def main(argv):
                 stats["wall_range_minutes"],
             ))
         index.append("")
-    large_rows = [row for row in index_rows if row["summary"].get("packet_size_bytes", 0) >= LARGE_PACKET_BYTES]
+    large_rows = [
+        row for row in index_rows
+        if row["summary"].get("packet_size_bytes", 0) >= LARGE_PACKET_BYTES
+        or row["summary"].get("packet_line_count", 0) >= LARGE_PACKET_LINES
+    ]
     if large_rows:
         index.append("## Large Packets\n")
+        index.append(
+            "These packets meet or exceed the Read 25000-token cap on a full read "
+            "(>= %d KB or >= %d lines). Open them only with offset/limit or grep."
+            % (LARGE_PACKET_BYTES // 1024, LARGE_PACKET_LINES)
+        )
+        index.append("")
         index.append("| Session | Size KB | Lines | Read strategy | Packet |")
         index.append("|---|---:|---:|---|---|")
         for row in sorted(large_rows, key=lambda r: -r["summary"].get("packet_size_bytes", 0))[:20]:
@@ -1372,6 +1389,7 @@ def main(argv):
     index.append("- Treat `raw_subagent_transcript_count` as storage/transcript count and `logical_subagent_role_count` as the distinct delegated role labels observed in parent tool calls.")
     index.append("- Treat subagent tool counts as de-duplicated by tool_use ID. Prefer subagent active union minutes for elapsed role activity; cumulative minutes can include resumed transcript context.")
     index.append("- For packets listed under Large Packets, do not full-read the file. Use bounded ranges around Metadata, Main Signals, Agent Activity, Notable Tool Results, or grep/find first.")
+    index.append("- In `detailed` mode, do not open every `Recommended Packets` entry in parallel. Skip sessions whose signals are already covered, and target roughly 50-80K tokens of total opened packet content.")
     index.append("- Prefer substantive sessions for first-pass packet reading; sample no-op or low-signal sessions only when explaining noise or interruptions.")
     index.append("- Analyze main-session coordination separately from subagent activity.")
     index.append("- Report delegation patterns, friction, useful agent workflows, and missed opportunities.")

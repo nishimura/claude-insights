@@ -149,8 +149,13 @@ data/runs/<timestamp>/
 
 Then ask your assistant to read `aggregate.json` and `index.md`, selectively
 read packet files, and write `report.md` in the same run directory.
-Packet files can be multi-megabyte, so read targeted sections or bounded line
-ranges instead of opening huge packets in full.
+The `Read` tool has a 25000-token limit. For packets with significant
+non-ASCII (multibyte) text this is reached around ~40KB or ~700 lines; ASCII-
+heavy packets fit more text per token, so these limits are conservative.
+Inspect the `Large Packets` index section and each session's
+`suggested_read_strategy` before opening a packet; for entries marked
+`large_packet`, use bounded `offset`/`limit` ranges or `grep` instead of a full
+read.
 
 ## Output Files
 
@@ -228,8 +233,9 @@ and end of the file to confirm it is complete.
   `--limit` to control how many recent matching sessions are packetized.
 - For larger limits, read `aggregate.json` and `index.md` first, then open
   substantive packets before sampling low-signal or no-op sessions.
-- Packet files can be multi-megabyte. Read targeted sections or bounded line
-  ranges instead of opening huge packets in full.
+- Packet files often exceed the Read 25000-token cap (roughly 40KB / 700 lines)
+  and a few sessions can reach multi-megabyte. Read targeted sections or bounded
+  line ranges instead of opening flagged packets in full.
 - The packets are intermediate evidence, not the final report.
 - Session duration is based on transcript timestamps and may include idle time.
 - Subagent counts can be noisy when a role is recorded across multiple JSONL
