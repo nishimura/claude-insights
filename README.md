@@ -83,33 +83,32 @@ claude-insights/
 No package install is required. The primary scripts use only the Python standard
 library.
 
-## Use As A Skill
+## Use As A Claude Code Skill
 
-Link this repository as a skill directory.
-
-For Codex:
+Link this repository as a Claude Code skill directory:
 
 ```bash
-mkdir -p ~/.codex/skills
-ln -s /absolute/path/to/claude-insights ~/.codex/skills/claude-insights
+mkdir -p ~/.claude/skills
+ln -s /absolute/path/to/claude-insights ~/.claude/skills/claude-insights
 ```
 
-Then start a new Codex session and ask:
+Invoke it explicitly in Claude Code:
 
 ```text
-Use the claude-insights skill to analyze Claude Code sessions run from
-/path/to/project/branch_*.
-Limit to 5 sessions. Read aggregate.json and index.md first, then only the
-packets needed, and write report.md in the generated output directory.
+/claude-insights /path/to/project/branch_*
+/claude-insights /path/to/project brief
+/claude-insights /path/to/project detailed
 ```
 
-For Claude Code, link the repository where your Claude skills are loaded, or
-point Claude at `SKILL.md` directly:
+The skill is configured with `disable-model-invocation: true`, so it should not
+start automatically from ordinary conversation. If no path/glob is provided, it
+asks for the Claude Code session startup directory or cwd glob instead of
+guessing from shell `pwd`.
 
-```text
-Follow /absolute/path/to/claude-insights/SKILL.md and generate an insights
-report for /path/to/project/branch_* with limit 5.
-```
+Mode words are normalized:
+
+- `brief`, `short`, `simple`
+- `detailed`, `detail`, `deep`, `thorough`
 
 ## Direct CLI Use
 

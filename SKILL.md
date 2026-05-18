@@ -1,45 +1,97 @@
 ---
 name: claude-insights
-description: Generate insights reports from local Claude Code session history scoped by execution directory globs, especially sessions with subagent activity. Use when the user asks to analyze Claude Code sessions, inspect agent delegation, or create an insights report for directories like /path/to/project/branch_*.
+description: Analyze Claude Code session history for an explicitly provided cwd/path glob and write a Markdown insights report.
+argument-hint: "[path/glob] [brief|detailed]"
+disable-model-invocation: true
 ---
 
 # Claude Insights
 
-Use this skill to create an insights report from local Claude Code session logs. The current assistant performs the analysis in the conversation after deterministic scripts prepare scoped Markdown packets.
+Invoke this skill explicitly as `/claude-insights ...`.
 
-The skill directory is the directory containing this `SKILL.md`. Run bundled scripts from that directory.
+Do not run this workflow automatically from ordinary conversation. This tool
+analyzes Claude Code transcript files, so Claude Code is the recommended runtime
+for the final report step.
 
-## Workflow
+## Arguments
 
-1. Ask for or infer one or more execution-directory patterns, for example:
+Parse `$ARGUMENTS` as:
 
-```text
-/home/user/project/branch_*
-```
+- target path/glob: a Claude Code session startup cwd, project directory, worktree, or glob
+- mode: `brief` or `detailed`
 
-2. Run the collector:
+Use these canonical modes internally:
+
+- `brief`: `brief`, `short`, `simple`
+- `detailed`: `detailed`, `detail`, `deep`, `thorough`
+
+If no target path/glob is provided, ask the user for the Claude Code session
+startup directory or cwd glob and wait. Do not infer it from shell `pwd`, because
+shell cwd may differ from the session startup directory after `!cd` or other
+commands.
+
+Default mode is `brief`.
+
+## Collector
+
+Run from this skill directory:
 
 ```bash
-python3 bin/collect-project-packets.py --limit 20 "/path/to/project/branch_*"
+python3 bin/collect-project-packets.py --limit 20 "<path-or-glob>"
 ```
 
-If not running from the skill directory, use the absolute path to this skill's `bin/collect-project-packets.py`.
+Use these defaults:
 
-3. Read only the generated `aggregate.json` and `index.md` first. They list packet files, recommended packet groups, scope metadata, session kinds, report-worthy flags, first intents, signal classes, edit/write counts, verification counts and success/failure breakdowns, errors, interruption signals, active duration, user-correction signals, raw subagent transcript counts, logical subagent role counts, and top files.
+- `brief`: `--limit 10`
+- `detailed`: `--limit 30`
 
-4. Read selected packet files as needed. Do not read every packet blindly when many sessions match.
+Useful optional flags:
 
-5. Write `report.md` in the generated output directory. Keep it concise, evidence-based, and focused on the selected Claude Code sessions.
+```bash
+--exclude-noop
+--max-main-lines 180
+--max-agent-lines 80
+--max-agents 12
+```
 
-## Packet Selection Strategy
+## Report Workflow
 
-When `--limit` is high, use this order instead of opening every packet:
+1. Run the Python collector.
+2. Read `aggregate.json` and `index.md` first.
+3. Use `recommended_packets` and `report_flags` to choose packet files.
+4. Open only selected `packets/*.md`; do not read every packet blindly.
+5. Preserve the distinction between main-session behavior and subagent behavior.
+6. Write `report.md` in the generated output directory.
 
-1. Start from `aggregate.json`, especially `recommended_packets`, to identify agent-heavy, error-heavy, edit-heavy, verification-heavy, interrupted, representative, and no-op example sessions.
-2. Use `index.md` flags to choose packets with substantive signal first, especially delegated, implementation, verification-heavy, error-heavy, edit-heavy, user-correction, or interrupted sessions.
-3. Sample at most a few low-signal or no-op packets when they explain scope noise, aborted work, or repeated setup friction.
-4. For subagent analysis, compare `raw_subagent_transcript_count` with `logical_subagent_role_count`; raw transcripts can be split across files, while logical roles come from parent delegation labels.
-5. Record which packets were opened in the report's Evidence section.
+For `brief`, open only the strongest recommended packets, usually 2-4 packets.
+For `detailed`, use more of `recommended_packets`, but still avoid opening every
+packet unless needed.
+
+## Packet Selection
+
+Prefer packets in this order:
+
+1. `recommended_packets.agent_heavy`
+2. `recommended_packets.error_heavy`
+3. `recommended_packets.verification_heavy`
+4. `recommended_packets.interrupted`
+5. `recommended_packets.representative`
+6. `recommended_packets.noop_examples`, only if no-op rate is report-worthy
+
+Use `index.md` flags to refine the selection:
+
+- `agent-heavy`
+- `error-heavy`
+- `verification-heavy`
+- `edit-heavy`
+- `interrupted`
+- `user-correction`
+- `docs`
+- `implementation`
+
+For subagent analysis, compare `raw_subagent_transcript_count` with
+`logical_subagent_role_count`; raw transcripts can be split across files, while
+logical roles come from parent delegation labels.
 
 ## Report Shape
 
@@ -67,11 +119,15 @@ Use these sections unless the user asks otherwise:
 ## Limits of This Report
 ```
 
-If the user later wants model-to-model comparison, generate separate reports from the same `index.md`/packet set and compare those reports as a separate task. Do not put speculative model comparisons inside a single-session-log report.
+Keep reports concise in `brief` mode. In `detailed` mode, include more evidence
+and more packet IDs, but still summarize rather than pasting packet content.
 
-## Constraints
+## Future Experiment
 
-- Do not start a separate LLM process for the analysis unless the user explicitly asks. Use scripts only to prepare packet files; the current assistant should read the generated packet files and write the report.
-- Keep large intermediate data out of the conversation. Start from `aggregate.json` and `index.md`, then open only relevant packet files.
-- Preserve the distinction between main-session behavior and subagent behavior.
-- Use the generated packet paths; do not inspect raw `~/.claude/projects` logs unless packet generation fails.
+Do not add `context: fork` yet. It should be tested separately after this
+slash-skill workflow is stable. Useful questions to test:
+
+- whether a forked skill can use subagents or team/fork features recursively
+- whether forked analysis improves report quality
+- whether intermediate files can be simplified if recursive subagent analysis is reliable
+- how forked skill execution appears in Claude Code logs when analyzed by this tool

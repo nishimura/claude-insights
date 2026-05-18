@@ -18,7 +18,7 @@ except ImportError:
 INTENT_CLIP = 140
 IDLE_GAP_SECONDS = 30 * 60
 USER_CORRECTION_RE = re.compile(
-    r"(違う|そうではなく|もう一度|ニュアンス|wrong|not right|try again)",
+    r"(wrong|not right|try again|not what i meant|instead|again)",
     re.IGNORECASE,
 )
 FAILURE_RE = re.compile(r"(fail|failed|failure|error|exit code [1-9]|not ok|fatal|exception)", re.IGNORECASE)
@@ -463,8 +463,8 @@ def summarize_session(meta):
 
     docs_signal = any("/docs/" in path or "claude-docs" in path or path.endswith(".md") for path in files)
     intent_lower = first_intent.lower()
-    debugging_signal = errors > 0 or any(word in intent_lower for word in ("error", "fail", "fix", "原因", "エラー", "失敗"))
-    review_signal = any(word in intent_lower for word in ("review", "レビュー", "差分", "説明して"))
+    debugging_signal = errors > 0 or any(word in intent_lower for word in ("error", "fail", "fix", "broken", "debug"))
+    review_signal = any(word in intent_lower for word in ("review", "diff", "explain"))
     planning_signal = "plan" in intent_lower or any("PlanMode" == name or "ExitPlanMode" == name for name in tools)
     investigation_signal = edit_write_count == 0 and (tools.get("Read", 0) + tools.get("Grep", 0) + tools.get("Glob", 0) + tools.get("Bash", 0)) >= 3
 
