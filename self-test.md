@@ -22,11 +22,15 @@ correctly and whether the previous run followed this skill's workflow.
 2. Read `aggregate.json`, `index.md`, and the single packet.
 3. Read the relevant parts of `bin/collect-project-packets.py` and
    `bin/build-session-packet.py` before judging parser behavior.
-4. Write `self-test-report.md`, not `report.md`.
+4. Summarize the expected intermediate file formats from the Python code:
+   `aggregate.json`, `index.md`, `next-action.json`, and `packets/<session>.md`.
+5. Write `self-test-report.md`, not `report.md`.
 
 ## Required Self-Test Checks
 
 - Confirm exactly one session was packetized.
+- Confirm the report includes a short "Expected Intermediate Formats" section
+  based on the Python code, not only on generated examples.
 - Confirm `session_kind`, `signal_class`, `top_tools`, and shell commands match
   the packet timeline.
 - Verify numeric consistency:
@@ -44,6 +48,27 @@ correctly and whether the previous run followed this skill's workflow.
   or suspicious unknown block types.
 - If the packet contains subagents, verify role names against parent Agent input
   and the first user message; do not trust summary text such as `OK`.
+
+## Expected Intermediate Formats
+
+The self-test report must briefly describe the expected shape of these files,
+based on reading `bin/collect-project-packets.py` and
+`bin/build-session-packet.py`:
+
+- `aggregate.json`: top-level `totals`, `session_kinds`,
+  `recommended_packets`, `subagent_role_stats`, and `sessions`; per-session
+  records should include counts, flags, packet metadata, top files/tools, and
+  subagent summaries.
+- `index.md`: Scope, Aggregate Signals, optional Subagent Role Stats, optional
+  Large Packets, Recommended Packets, Packetized Sessions, and Report Guidance.
+- `next-action.json`: output directory, index path, aggregate path, packet
+  count, session summaries, and suggested next step.
+- `packets/<session>.md`: Metadata, Main Intent, Main Timeline, Main Signals,
+  optional Notable Main Tool Results, Agent Activity, and Combined Delegation
+  Signals.
+
+If the generated files do not match this expected shape, report `FAIL` or
+`PASS with warnings` with concrete missing fields or sections.
 
 ## Self-Test Verdict
 
