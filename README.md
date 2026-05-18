@@ -1,0 +1,205 @@
+# Claude Insights
+
+Generate focused insights reports from local Claude Code session history, with
+directory-scoped analysis and explicit subagent visibility.
+
+This repository is a portable skill/tool bundle that complements Claude Code's
+built-in `/insights` command. It reads Claude Code transcript files from
+`~/.claude/projects`, selects sessions by the directory where Claude Code was
+run, prepares LLM-friendly Markdown packets, and lets the current assistant
+write a final `report.md`.
+
+It is designed for reports about workflow, delegation, subagent usage, friction,
+and useful patterns in a specific project or branch family.
+
+## Why Not Just Use `/insights`?
+
+Claude Code's built-in `/insights` command is the right default for broad
+personal usage analytics. It scans recent sessions, extracts facets, aggregates
+usage, and writes a polished HTML report.
+
+This tool is for a narrower use case:
+
+- You want to analyze sessions for one project, worktree, or branch family.
+- You want to understand how main-session coordination and subagents interacted.
+- You want the current assistant to write a project-specific Markdown report
+  from inspectable intermediate files.
+- You want to compare reports written by different assistants from the same
+  prepared packet set, without re-running the data extraction.
+
+It does not try to replace `/insights`; it gives you a more inspectable,
+project-scoped path when `/insights` is too broad or hides too much of the
+subagent workflow.
+
+## Differences From Built-In `/insights`
+
+| Area | Built-in `/insights` | This tool |
+|---|---|---|
+| Scope | Broad recent Claude Code usage | Sessions whose `cwd` matches a directory/glob |
+| Output | HTML report | Markdown packets plus assistant-written `report.md` |
+| Intermediate data | Cached metadata/facets under Claude usage data | Inspectable `aggregate.json`, `index.md`, and `packets/*.md` |
+| LLM flow | Internal API calls generate facets and report sections | Current assistant reads packets and writes the report |
+| Subagents | Mostly visible as `Agent`/`Task` tool usage | Parent session and `subagents/*.jsonl` are separated and summarized |
+| Best for | Personal usage overview and charts | Project-specific workflow review and delegation analysis |
+
+## What It Does
+
+- Filters Claude Code sessions by execution directory, such as
+  `/path/to/project/branch_*`.
+- Reconstructs the selected conversation branch from `uuid` / `parentUuid`.
+- Finds subagent transcripts under each parent session's `subagents/` directory.
+- Writes one Markdown packet per session with:
+  - main-session timeline
+  - subagent activity
+  - tool counts
+  - referenced files and shell commands
+  - delegation and error signals
+- Produces an `index.md` so the assistant can read only the packets it needs.
+- Produces an `aggregate.json` with first intents, session kinds, signal
+  classes, edit/write counts, verification counts, errors, interruptions,
+  subagent transcript counts, logical role counts, and top files.
+- Leaves final interpretation to the active assistant conversation, rather than
+  starting a separate analysis process.
+
+## Repository Layout
+
+```text
+claude-insights/
+  SKILL.md
+  README.md
+  bin/
+    collect-project-packets.py
+    build-session-packet.py
+  data/
+    runs/
+```
+
+## Requirements
+
+- Python 3
+- Local Claude Code history at `~/.claude/projects`
+- Optional: Codex or Claude Code skill support
+
+No package install is required. The primary scripts use only the Python standard
+library.
+
+## Use As A Skill
+
+Link this repository as a skill directory.
+
+For Codex:
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s /absolute/path/to/claude-insights ~/.codex/skills/claude-insights
+```
+
+Then start a new Codex session and ask:
+
+```text
+Use the claude-insights skill to analyze Claude Code sessions run from
+/path/to/project/branch_*.
+Limit to 5 sessions. Read aggregate.json and index.md first, then only the
+packets needed, and write report.md in the generated output directory.
+```
+
+For Claude Code, link the repository where your Claude skills are loaded, or
+point Claude at `SKILL.md` directly:
+
+```text
+Follow /absolute/path/to/claude-insights/SKILL.md and generate an insights
+report for /path/to/project/branch_* with limit 5.
+```
+
+## Direct CLI Use
+
+From the repository root:
+
+```bash
+python3 bin/collect-project-packets.py --limit 5 "/path/to/project/branch_*"
+```
+
+On Windows, use `py` if that is the configured Python launcher.
+
+This writes a run directory:
+
+```text
+data/runs/<timestamp>/
+  aggregate.json
+  index.md
+  next-action.json
+  packets/
+    <session-id>.md
+```
+
+Then ask your assistant to read `aggregate.json` and `index.md`, selectively
+read packet files, and write `report.md` in the same run directory.
+
+## Output Files
+
+`index.md`
+
+Small overview of the run: scope, matched sessions, packet paths, top tools, and
+agent-call counts. Read this first alongside `aggregate.json`.
+
+`aggregate.json`
+
+Machine-readable run summary for high-limit reports. It includes per-session
+first intent, session kind, substantive / low-signal / no-op classification,
+edit/write count, verification count, error count, interruption signal, raw
+subagent transcript count, logical subagent role count, top files, and top
+tools.
+
+`packets/<session-id>.md`
+
+Detailed per-session packet. It separates main-session behavior from subagent
+behavior and includes clipped timelines, tool counts, errors, referenced files,
+and shell commands.
+
+`next-action.json`
+
+Machine-readable pointer to the index, output directory, packet count, and
+session summaries.
+
+`report.md`
+
+Not generated by the collector. The active assistant writes this after reading
+the index and selected packets.
+
+## Recommended Report Sections
+
+```markdown
+# Session Insights Report
+
+## Scope
+
+## Executive Summary
+
+## Main Workflow Patterns
+
+## Subagent / Delegation Patterns
+
+## Friction and Failure Modes
+
+## What Worked Well
+
+## Improvements to Try
+
+## Evidence Used
+
+## Limits of This Report
+```
+
+## Notes
+
+- The collector intentionally does not analyze every session by default. Use
+  `--limit` to control how many recent matching sessions are packetized.
+- For larger limits, read `aggregate.json` and `index.md` first, then open
+  substantive packets before sampling low-signal or no-op sessions.
+- The packets are intermediate evidence, not the final report.
+- Session duration is based on transcript timestamps and may include idle time.
+- Subagent counts can be noisy when a role is recorded across multiple JSONL
+  files. Treat named role flow and packet evidence as more reliable than raw
+  discovered-subagent counts.
+- The scripts read local Claude Code history. Review generated packets before
+  sharing them outside your machine.
