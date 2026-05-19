@@ -97,6 +97,7 @@ Invoke it explicitly in Claude Code:
 ```text
 /claude-insights /path/to/project/branch_*
 /claude-insights /path/to/project brief
+/claude-insights /path/to/project normal
 /claude-insights /path/to/project detailed
 /claude-insights /path/to/project latest:3
 /claude-insights 45685c9d-0a30-4101-9924-e1eda0abc0c4 detailed
@@ -110,7 +111,13 @@ guessing from shell `pwd`.
 Mode words are normalized:
 
 - `brief`, `short`, `simple`
-- `detailed`, `detail`, `deep`, `thorough`
+- `normal`, `default`, `standard`, `regular`, `usual`
+- `detailed`, `detail`, `deep`, `thorough`, `extensive`
+
+Default report mode is `normal`, which uses the previous detailed profile.
+Use `brief` only for a lightweight pass. Use `detailed` / `deep` / `thorough`
+when you want a deeper pass that reads more packet evidence without full-reading
+large packets.
 
 Session IDs are supported as full UUIDs or unique UUID prefixes. In session-id
 mode, the cwd path/glob is optional and `--session-id` is used internally. Latest
@@ -151,6 +158,7 @@ Useful options:
 ```bash
 python3 bin/collect-project-packets.py --session-id 45685c9d-0a30-4101-9924-e1eda0abc0c4
 python3 bin/collect-project-packets.py --limit 30 --exclude-noop "/path/to/project/branch_*"
+python3 bin/collect-project-packets.py --limit 40 --exclude-noop --max-main-lines 320 --max-agent-lines 180 "/path/to/project/branch_*"
 python3 bin/collect-project-packets.py --max-main-lines 180 --max-agent-lines 80 "/path/to/project/branch_*"
 ```
 

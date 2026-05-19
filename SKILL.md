@@ -1,7 +1,7 @@
 ---
 name: claude-insights
 description: Analyze Claude Code session history for an explicitly provided cwd/path glob and write a Markdown insights report.
-argument-hint: "[path/glob] [brief|detailed]"
+argument-hint: "[path/glob] [brief|normal|deep]"
 disable-model-invocation: true
 ---
 
@@ -18,21 +18,22 @@ for the final report step.
 Parse `$ARGUMENTS` as:
 
 - target path/glob: a Claude Code session startup cwd, project directory, worktree, or glob
-- mode: `brief` or `detailed`
+- mode: `brief`, `normal`, or `deep`
 - optional latest count: `latest:N`, or natural language such as "latest 3 sessions"
 - optional session ID: a full Claude Code session UUID or unique UUID prefix
 
 Use these canonical modes internally:
 
 - `brief`: `brief`, `short`, `simple`
-- `detailed`: `detailed`, `detail`, `deep`, `thorough`
+- `normal`: `normal`, `default`, `standard`, `regular`, `usual`
+- `deep`: `detailed`, `detail`, `deep`, `thorough`, `extensive`
 
 If no target path/glob is provided, ask the user for the Claude Code session
 startup directory or cwd glob and wait. Do not infer it from shell `pwd`, because
 shell cwd may differ from the session startup directory after `!cd` or other
 commands.
 
-Default mode is `brief`.
+Default mode is `normal`.
 
 If a full UUID or UUID prefix is provided, run a single-session collection with
 `--session-id`. A target path/glob may still be provided to disambiguate, but it
@@ -52,7 +53,8 @@ python3 bin/collect-project-packets.py --limit 20 "<path-or-glob>"
 Use these defaults:
 
 - `brief`: `--limit 10`
-- `detailed`: `--limit 30`
+- `normal`: `--limit 30`
+- `deep`: `--limit 40 --exclude-noop --max-main-lines 320 --max-agent-lines 180`
 
 Useful optional flags:
 
@@ -87,9 +89,12 @@ If a repeated JSON transformation becomes necessary, add a named helper script
 under `bin/` so the behavior is reviewable and reusable.
 
 For `brief`, open only the strongest recommended packets, usually 2-4 packets.
-For `detailed`, use more of `recommended_packets`, but do not open every entry
-in parallel. Skip sessions whose signals are already covered by an earlier
-packet, and target roughly 50-80K tokens of total opened packet content.
+For `normal`, use more of `recommended_packets`, but do not open every entry in
+parallel. Skip sessions whose signals are already covered by an earlier packet,
+and target roughly 50-80K tokens of total opened packet content.
+For `deep`, inspect additional non-overlapping recommended packets and read
+more bounded ranges from large packets. Target roughly 75-120K tokens of total
+opened packet content, but still treat the per-call Read limit as strict.
 
 The `Read` tool has a 25000-token limit. Non-ASCII (multibyte) text consumes
 roughly 2 bytes per token, so a packet with significant non-ASCII content at
@@ -169,14 +174,15 @@ Use these sections unless the user asks otherwise:
 ## Limits of This Report
 ```
 
-Keep reports concise in `brief` mode. In `detailed` mode, include more evidence
+Keep reports concise in `brief` mode. In `normal` mode, include the main
+evidence and representative packet IDs. In `deep` mode, include more evidence
 and more packet IDs, but still summarize rather than pasting packet content.
 
 ## Self-Test Mode
 
 If the user invokes `/claude-insights self-test ...`, read
 [self-test.md](self-test.md) for the full self-test workflow, required checks,
-and verdict format. Do not load this file in normal report mode.
+and verdict format. Do not load this file for ordinary project reports.
 
 ## Future Experiment
 
