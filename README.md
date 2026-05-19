@@ -82,11 +82,16 @@ claude-insights/
 ## Requirements
 
 - Python 3
-- Local Claude Code history at `~/.claude/projects`
+- Local Claude Code history:
+  - macOS/Linux/WSL: `~/.claude/projects`
+  - Windows: `%USERPROFILE%\.claude\projects`
 - Optional: Codex or Claude Code skill support
 
 No package install is required. The primary scripts use only the Python standard
 library.
+
+For collector internals, output file details, self-test mode, and direct CLI
+debugging, see [INTERNALS.md](INTERNALS.md).
 
 ## Use As A Claude Code Skill
 
@@ -141,169 +146,3 @@ latest-state references, not proof that older sessions violated current rules.
 Session IDs are supported as full UUIDs or unique UUID prefixes. In session-id
 mode, the cwd path/glob is optional and `--session-id` is used internally. Latest
 count requests can be expressed as `latest:N`, which maps to `--limit N`.
-
-## Self-Test Mode
-
-Use self-test when you want to analyze a previous `claude-insights` execution
-itself rather than the target project:
-
-```text
-/claude-insights self-test <session-id>
-```
-
-Prefer an explicit session ID. Avoid `latest:1` for self-test unless you have
-confirmed the target session, because it can select the current self-test
-session instead of the previous run.
-
-Self-test should write `self-test-report.md`. It checks log-format health,
-parser behavior, numeric consistency, direct `aggregate.json`/`index.md` reads,
-large-packet handling, report verification, and accidental ad hoc `python -c`
-usage.
-
-## Direct CLI Use
-
-From the repository root:
-
-```bash
-python3 bin/collect-project-packets.py --limit 5 "/path/to/project/branch_*"
-python3 bin/collect-project-packets.py --session-id 45685c9d-0a30-4101-9924-e1eda0abc0c4
-python3 bin/collect-project-packets.py "/path/to/project" latest:3
-```
-
-On Windows, use `py` if that is the configured Python launcher.
-
-Useful options:
-
-```bash
-python3 bin/collect-project-packets.py --session-id 45685c9d-0a30-4101-9924-e1eda0abc0c4
-python3 bin/collect-project-packets.py --limit 30 --exclude-noop "/path/to/project/branch_*"
-python3 bin/collect-project-packets.py --limit 40 --exclude-noop --max-main-lines 320 --max-agent-lines 180 "/path/to/project/branch_*"
-python3 bin/collect-project-packets.py --max-main-lines 180 --max-agent-lines 80 "/path/to/project/branch_*"
-```
-
-This writes a run directory:
-
-```text
-data/runs/<timestamp>/
-  aggregate.json
-  index.md
-  next-action.json
-  packets/
-    <session-id>.md
-```
-
-Then ask your assistant to read `aggregate.json` and `index.md`, selectively
-read packet files, and write `report.md` in the same run directory.
-Avoid ad hoc `python -c` or Python heredocs for inspecting generated JSON; read
-`aggregate.json` directly, or promote repeated transformations into a named
-helper script under `bin/`.
-The `Read` tool has a 25000-token limit. For packets with significant
-non-ASCII (multibyte) text this is reached around ~40KB or ~700 lines; ASCII-
-heavy packets fit more text per token, so these limits are conservative.
-Inspect the `Large Packets` index section and each session's
-`suggested_read_strategy` before opening a packet; for entries marked
-`large_packet`, use bounded `offset`/`limit` ranges or `grep` instead of a full
-read.
-
-## Output Files
-
-`index.md`
-
-Small overview of the run: scope, matched sessions, packet paths, top tools, and
-agent-call counts. It also includes Focus Hints such as slash commands, skill
-base directories, and top skill/doc files when available. Read this first
-alongside `aggregate.json`.
-
-`aggregate.json`
-
-Machine-readable run summary for high-limit reports. It includes per-session
-first intent, session kind, substantive / low-signal / no-op classification,
-report-worthy flags, edit/write count, verification count and success/failure
-breakdown, error count, interruption signal, active duration, user-correction
-signals, raw subagent transcript count, logical subagent role count, top files,
-top tools, and recommended packet groups. It also includes slash command
-metadata and skill base directories when they are visible in the session
-transcript.
-
-The legacy `verification_count` and `error_count` fields refer to the main
-session. Subagent activity is exposed separately as `subagent_*` fields and
-combined totals as `combined_*` fields. Role-level subagent statistics are
-available in `subagent_role_stats`. Subagent tool counts are de-duplicated by
-tool_use ID. Prefer `active_minutes_union` for elapsed role activity;
-`active_minutes_cumulative` can include repeated context from resumed agents.
-
-Report/document completeness checks such as `grep '^## ' report.md`, `wc -l`,
-or `tail report.md` are counted separately as `report_verification_*` fields.
-They are not included in build/test `verification_count`.
-
-Packet sizing metadata is included as `packet_size_bytes`, `packet_line_count`,
-`large_packet`, `very_large_packet`, and `suggested_read_strategy`, so report
-authors can avoid full reads of large packet files.
-
-`packets/<session-id>.md`
-
-Detailed per-session packet. It separates main-session behavior from subagent
-behavior and includes clipped timelines, tool counts, errors, referenced files,
-shell commands, notable error/verification tool results, verification outcome
-counts, active duration, and subagent outcome hints.
-
-`next-action.json`
-
-Machine-readable pointer to the index, output directory, packet count, and
-session summaries.
-
-`report.md`
-
-Not generated by the collector. The active assistant writes this after reading
-the index and selected packets.
-After writing it, verify that the expected headings exist and read the beginning
-and end of the file to confirm it is complete.
-Reports use a stable default shape, but the assistant may merge thin sections
-or use subsection headings when that makes the findings clearer.
-Reports may compare historical sessions with current project files when that
-helps interpretation. Such comparisons should be framed chronologically:
-current files, docs, skills, and tests may differ from the versions that existed
-during older sessions.
-
-## Recommended Report Sections
-
-```markdown
-# Session Insights Report
-
-## Scope
-
-## Executive Summary
-
-## Main Workflow Patterns
-
-## Subagent / Delegation Patterns
-
-## Friction and Failure Modes
-
-## What Worked Well
-
-## Improvements to Try
-
-## Evidence Used
-
-## Limits of This Report
-```
-
-## Notes
-
-- The collector intentionally does not analyze every session by default. Use
-  `--limit` to control how many recent matching sessions are packetized.
-- For larger limits, read `aggregate.json` and `index.md` first, then open
-  substantive packets before sampling low-signal or no-op sessions.
-- Avoid ad hoc `python -c` or Python heredocs for JSON inspection; use direct
-  reads, shell text tools for simple lookups, or named helper scripts.
-- Packet files often exceed the Read 25000-token cap (roughly 40KB / 700 lines)
-  and a few sessions can reach multi-megabyte. Read targeted sections or bounded
-  line ranges instead of opening flagged packets in full.
-- The packets are intermediate evidence, not the final report.
-- Session duration is based on transcript timestamps and may include idle time.
-- Subagent counts can be noisy when a role is recorded across multiple JSONL
-  files. Treat named role flow and packet evidence as more reliable than raw
-  discovered-subagent counts.
-- The scripts read local Claude Code history. Review generated packets before
-  sharing them outside your machine.
