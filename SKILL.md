@@ -88,7 +88,12 @@ session context window, so a few bounded reads cost almost no context.
 If a repeated JSON transformation becomes necessary, add a named helper script
 under `bin/` so the behavior is reviewable and reusable.
 
+Modes change the evidence budget and sampling strategy more than the importance
+threshold. `deep` reads more evidence, but it does not guarantee that all
+`brief` or `normal` findings will appear in the final report.
+
 For `brief`, open only the strongest recommended packets, usually 2-4 packets.
+Do not compress high-signal findings just because the mode is brief.
 For `normal`, use more of `recommended_packets`, but do not open every entry in
 parallel. Skip sessions whose signals are already covered by an earlier packet,
 and target roughly 50-80K tokens of total opened packet content.
@@ -174,9 +179,15 @@ Use these sections unless the user asks otherwise:
 ## Limits of This Report
 ```
 
-Keep reports concise in `brief` mode. In `normal` mode, include the main
-evidence and representative packet IDs. In `deep` mode, include more evidence
-and more packet IDs, but still summarize rather than pasting packet content.
+Use the report shape as a default, not a rigid form. Keep the major sections
+stable when they are useful. Merge or shorten sections that would be empty. Use
+subsection headings inside a major section when they make high-signal findings
+easier to follow.
+
+For `brief`, limit evidence scope rather than finding importance. For `normal`,
+include the main evidence and representative packet IDs. For `deep`, include
+more evidence and more packet IDs, but still summarize rather than pasting
+packet content.
 
 ## Self-Test Mode
 
