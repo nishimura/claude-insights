@@ -24,12 +24,17 @@ This tool is for a narrower use case:
 - You want to understand how main-session coordination and subagents interacted.
 - You want the current assistant to write a project-specific Markdown report
   from inspectable intermediate files.
+- You want to continue investigating from the same assistant conversation after
+  the first report is written.
 - You want to compare reports written by different assistants from the same
   prepared packet set, without re-running the data extraction.
 
 It does not try to replace `/insights`; it gives you a more inspectable,
 project-scoped path when `/insights` is too broad or hides too much of the
-subagent workflow.
+subagent workflow. Because the report is written by the active assistant, you
+can continue asking follow-up questions with the report context still loaded.
+The tradeoff is that unrelated prior conversation can also affect the report;
+start from a dedicated session when you want a cleaner analysis context.
 
 ## Differences From Built-In `/insights`
 
@@ -101,6 +106,7 @@ Invoke it explicitly in Claude Code:
 /claude-insights /path/to/project detailed
 /claude-insights /path/to/project latest:3
 /claude-insights 45685c9d-0a30-4101-9924-e1eda0abc0c4 detailed
+/claude-insights /path/to/project deep investigate the review workflow; the current workflow guide is /path/to/docs/review-workflow.md
 ```
 
 The skill is configured with `disable-model-invocation: true`, so it should not
