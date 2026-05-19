@@ -125,6 +125,13 @@ different useful findings, especially for large or unusually complex projects.
 For important retrospectives, compare multiple modes or ask for a synthesis
 across runs.
 
+You can also ask for a focused report in natural language, such as a specific
+skill, command, feature, file area, failure mode, or workflow pattern. The
+assistant should use the generated Focus Hints, first intents, top files, and
+selected packets to find relevant evidence, and may read related current project
+files when that helps interpretation. These current files are treated as
+latest-state references, not proof that older sessions violated current rules.
+
 Session IDs are supported as full UUIDs or unique UUID prefixes. In session-id
 mode, the cwd path/glob is optional and `--session-id` is used internally. Latest
 count requests can be expressed as `latest:N`, which maps to `--limit N`.
@@ -197,7 +204,9 @@ read.
 `index.md`
 
 Small overview of the run: scope, matched sessions, packet paths, top tools, and
-agent-call counts. Read this first alongside `aggregate.json`.
+agent-call counts. It also includes Focus Hints such as slash commands, skill
+base directories, and top skill/doc files when available. Read this first
+alongside `aggregate.json`.
 
 `aggregate.json`
 
@@ -206,7 +215,9 @@ first intent, session kind, substantive / low-signal / no-op classification,
 report-worthy flags, edit/write count, verification count and success/failure
 breakdown, error count, interruption signal, active duration, user-correction
 signals, raw subagent transcript count, logical subagent role count, top files,
-top tools, and recommended packet groups.
+top tools, and recommended packet groups. It also includes slash command
+metadata and skill base directories when they are visible in the session
+transcript.
 
 The legacy `verification_count` and `error_count` fields refer to the main
 session. Subagent activity is exposed separately as `subagent_*` fields and
@@ -243,6 +254,10 @@ After writing it, verify that the expected headings exist and read the beginning
 and end of the file to confirm it is complete.
 Reports use a stable default shape, but the assistant may merge thin sections
 or use subsection headings when that makes the findings clearer.
+Reports may compare historical sessions with current project files when that
+helps interpretation. Such comparisons should be framed chronologically:
+current files, docs, skills, and tests may differ from the versions that existed
+during older sessions.
 
 ## Recommended Report Sections
 

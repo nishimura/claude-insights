@@ -101,6 +101,24 @@ For `deep`, inspect additional non-overlapping recommended packets and read
 more bounded ranges from large packets. Target roughly 75-120K tokens of total
 opened packet content, but still treat the per-call Read limit as strict.
 
+If the user provides a natural-language focus, use it to guide packet selection
+and local-file interpretation. The focus may be a skill, command, feature, file
+area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,
+`index.md` Focus Hints, first intents, top files, flags, and targeted grep to
+identify likely evidence. Read related local files only when they help interpret
+the focus; do not limit this behavior to skill definitions.
+
+Avoid interrupting focused reports with clarification questions unless the
+focus cannot be identified or a wrong assumption would make the report
+misleading. Prefer writing explicit assumptions and limits, then let the user
+correct the interpretation in a follow-up.
+
+Apply chronological caution. Current files, docs, skills, and tests may differ
+from the versions that existed during older sessions. When comparing historical
+session behavior to current files, frame differences as possible evolution,
+drift, observed mismatch, or follow-up checks unless the packet shows the same
+rule or file content existed at that time.
+
 The `Read` tool has a 25000-token limit. Non-ASCII (multibyte) text consumes
 roughly 2 bytes per token, so a packet with significant non-ASCII content at
 or above ~40KB or ~700 lines can truncate on a full read. Pure-ASCII packets
@@ -188,6 +206,11 @@ For `brief`, limit evidence scope rather than finding importance. For `normal`,
 include the main evidence and representative packet IDs. For `deep`, include
 more evidence and more packet IDs, but still summarize rather than pasting
 packet content.
+
+For focused or chronology-sensitive reports, prefer evidence-backed
+observations and hypotheses over hard verdicts. Include assumptions and
+follow-up checks when a later improvement session or a current file should
+validate the interpretation.
 
 ## Self-Test Mode
 

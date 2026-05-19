@@ -34,6 +34,7 @@ SUCCESS_RE = re.compile(r"(success|successful|passed|passing|ok|no errors|0 fail
 UUID_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.IGNORECASE)
 UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){0,3}(?:-[0-9a-f]{0,12})?$", re.IGNORECASE)
 LATEST_RE = re.compile(r"^latest:(\d+)$", re.IGNORECASE)
+SKILL_BASE_RE = re.compile(r"Base directory for this skill:\s*(\S+)")
 
 
 def expand_home(path):
@@ -116,6 +117,18 @@ def format_command_intent(text):
     return clip_text(" ".join(parts), INTENT_CLIP)
 
 
+def command_metadata_from_text(text):
+    trimmed = text.strip()
+    command_name = extract_xml_tag(trimmed, "command-name")
+    if not command_name or command_name in ("/clear", "/exit"):
+        return None
+    return {
+        "name": command_name,
+        "args": extract_xml_tag(trimmed, "command-args"),
+        "message": extract_xml_tag(trimmed, "command-message"),
+    }
+
+
 def format_intent_text(text):
     command_intent = format_command_intent(text)
     if command_intent:
@@ -167,6 +180,46 @@ def first_user_text_from_entries(entries):
                             continue
                         return format_intent_text(text)
     return ""
+
+
+def user_text_blocks(entries):
+    for entry in entries:
+        if entry.get("type") != "user":
+            continue
+        content = entry.get("message", {}).get("content")
+        if isinstance(content, str):
+            yield content
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    yield str(block.get("text", ""))
+
+
+def extract_session_markers(entries):
+    command_seen = {}
+    commands = []
+    skill_seen = {}
+    skill_dirs = []
+    for text in user_text_blocks(entries):
+        metadata = command_metadata_from_text(text)
+        if metadata:
+            key = "%s\x00%s\x00%s" % (
+                metadata.get("name", ""),
+                metadata.get("args", ""),
+                metadata.get("message", ""),
+            )
+            if key not in command_seen:
+                command_seen[key] = True
+                commands.append(metadata)
+        for match in SKILL_BASE_RE.finditer(text):
+            path = match.group(1).strip()
+            if path and path not in skill_seen:
+                skill_seen[path] = True
+                skill_dirs.append(path)
+    return {
+        "slash_commands": commands,
+        "skill_base_directories": skill_dirs,
+    }
 
 
 VERIFY_RE = re.compile(
@@ -568,6 +621,7 @@ def summarize_session(meta):
     logical_role_count = len(logical_roles)
     tool_count = sum(tools.values())
     first_intent = first_user_text_from_entries(entries)
+    session_markers = extract_session_markers(entries)
     user_correction_count = count_user_corrections(entries)
     durations = duration_metrics(entries)
 
@@ -639,6 +693,8 @@ def summarize_session(meta):
 
     return {
         "first_intent": first_intent,
+        "slash_commands": session_markers["slash_commands"],
+        "skill_base_directories": session_markers["skill_base_directories"],
         "session_kind": session_kind,
         "signal_class": signal_class,
         "substantive": signal_class == "substantive",
@@ -1048,6 +1104,32 @@ def recommended_packets(sessions):
     }
 
 
+def slash_command_label(command):
+    name = command.get("name", "") if isinstance(command, dict) else ""
+    message = command.get("message", "") if isinstance(command, dict) else ""
+    args = command.get("args", "") if isinstance(command, dict) else ""
+    if message and message != name.lstrip("/"):
+        return "%s %s" % (name, message)
+    if args:
+        return "%s %s" % (name, args)
+    return name
+
+
+def is_skill_related_path(path):
+    return (
+        "/.claude/skills/" in path
+        or "/skills/" in path and path.endswith("/SKILL.md")
+    )
+
+
+def is_doc_related_path(path):
+    return (
+        "claude-docs" in path
+        or "/docs/" in path
+        or path.endswith(".md")
+    )
+
+
 def main(argv):
     args = parse_args(argv)
     out_dir = expand_home(args.out).rstrip("/")
@@ -1132,6 +1214,8 @@ def main(argv):
     }
     aggregate_kinds = {}
     aggregate_files = {}
+    aggregate_slash_commands = {}
+    aggregate_skill_base_dirs = {}
     aggregate_subagent_roles = {}
 
     for item in selected_items:
@@ -1169,6 +1253,8 @@ def main(argv):
             "assistant_messages": meta["assistant_messages"],
             "agent_calls": agent_calls,
             "first_intent": summary["first_intent"],
+            "slash_commands": summary["slash_commands"],
+            "skill_base_directories": summary["skill_base_directories"],
             "session_kind": summary["session_kind"],
             "signal_class": summary["signal_class"],
             "substantive": summary["substantive"],
@@ -1256,6 +1342,12 @@ def main(argv):
         aggregate_totals["large_packet_count"] += 1 if packet_large else 0
         aggregate_totals["very_large_packet_count"] += 1 if packet_very_large else 0
         aggregate_kinds[summary["session_kind"]] = aggregate_kinds.get(summary["session_kind"], 0) + 1
+        for command in summary["slash_commands"]:
+            label = slash_command_label(command)
+            if label:
+                aggregate_slash_commands[label] = aggregate_slash_commands.get(label, 0) + 1
+        for path in summary["skill_base_directories"]:
+            aggregate_skill_base_dirs[path] = aggregate_skill_base_dirs.get(path, 0) + 1
         for file_path, count in summary["top_files"].items():
             aggregate_files[file_path] = aggregate_files.get(file_path, 0) + count
         for role, role_stats in summary["subagents"]["by_role"].items():
@@ -1282,6 +1374,8 @@ def main(argv):
             "session_kind": summary["session_kind"],
             "signal_class": summary["signal_class"],
             "first_intent": summary["first_intent"],
+            "slash_commands": summary["slash_commands"],
+            "skill_base_directories": summary["skill_base_directories"],
             "agent_calls": agent_calls,
             "human_users": meta["human_users"],
             "raw_subagent_transcript_count": summary["raw_subagent_transcript_count"],
@@ -1295,6 +1389,10 @@ def main(argv):
 
     aggregate_kinds = sort_counts(aggregate_kinds)
     aggregate_files = sort_counts(aggregate_files)
+    aggregate_slash_commands = sort_counts(aggregate_slash_commands)
+    aggregate_skill_base_dirs = sort_counts(aggregate_skill_base_dirs)
+    aggregate_skill_files = dict((path, count) for path, count in aggregate_files.items() if is_skill_related_path(path))
+    aggregate_doc_files = dict((path, count) for path, count in aggregate_files.items() if is_doc_related_path(path))
     aggregate_subagent_roles = dict(sorted(
         aggregate_subagent_roles.items(),
         key=lambda item: (-item[1]["transcript_count"], item[0]),
@@ -1368,6 +1466,19 @@ def main(argv):
         aggregate_totals["very_large_packet_count"],
     ))
     index.append("- Top files: %s\n" % format_counts(dict(list(aggregate_files.items())[:8])))
+    if aggregate_slash_commands or aggregate_skill_base_dirs or aggregate_skill_files or aggregate_doc_files:
+        index.append("## Focus Hints\n")
+        index.append("Use these hints when the user asks about a specific command, skill, file area, feature, or other natural-language focus. They are discovery aids, not automatic conclusions.")
+        index.append("")
+        if aggregate_slash_commands:
+            index.append("- Slash commands: %s" % format_counts(dict(list(aggregate_slash_commands.items())[:12])))
+        if aggregate_skill_base_dirs:
+            index.append("- Skill base directories: %s" % format_counts(dict(list(aggregate_skill_base_dirs.items())[:8])))
+        if aggregate_skill_files:
+            index.append("- Top skill files: %s" % format_counts(dict(list(aggregate_skill_files.items())[:8])))
+        if aggregate_doc_files:
+            index.append("- Top doc/Markdown files: %s" % format_counts(dict(list(aggregate_doc_files.items())[:8])))
+        index.append("")
     if aggregate_subagent_roles:
         index.append("## Subagent Role Stats\n")
         index.append("| Role | Transcripts | Verify | Errors | SendMessage | Active cum | Active union | Wall range |")
@@ -1418,8 +1529,8 @@ def main(argv):
     if not index_rows:
         index.append("_No matching sessions found._")
     else:
-        index.append("| Session | Started | Kind | Signal | Flags | First intent | Edit/write | Verify main/sub | Errors main/sub | Interrupted | Raw subagents | Logical roles | Active min | Packet KB/lines | Top files | Packet |")
-        index.append("|---|---:|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|---|---|")
+        index.append("| Session | Started | Kind | Signal | Flags | First intent | Commands | Edit/write | Verify main/sub | Errors main/sub | Interrupted | Raw subagents | Logical roles | Active min | Packet KB/lines | Top files | Packet |")
+        index.append("|---|---:|---|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|---|---|")
         for row in index_rows:
             meta = row["meta"]
             summary = row["summary"]
@@ -1432,13 +1543,20 @@ def main(argv):
                 int(round(summary.get("packet_size_bytes", 0) / 1024.0)),
                 summary.get("packet_line_count", 0),
             )
-            index.append("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |" % (
+            command_labels = []
+            for command in summary.get("slash_commands", [])[:3]:
+                label = slash_command_label(command)
+                if label:
+                    command_labels.append(label)
+            commands = md_cell("none" if not command_labels else ", ".join(command_labels))
+            index.append("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |" % (
                 row["short_id"],
                 meta["first_ts"],
                 summary["session_kind"],
                 summary["signal_class"],
                 md_cell(", ".join(summary["report_flags"]) if summary["report_flags"] else "none"),
                 md_cell(summary["first_intent"]),
+                commands,
                 summary["edit_write_count"],
                 "%s/%s" % (summary["verification_count"], summary["subagents"]["totals"]["verification_count"]),
                 "%s/%s" % (summary["error_count"], summary["subagents"]["totals"]["error_count"]),
@@ -1459,6 +1577,8 @@ def main(argv):
     index.append("- For packets listed under Large Packets, do not full-read the file. Use bounded ranges around Metadata, Main Signals, Agent Activity, Notable Tool Results, or grep/find first.")
     index.append("- In `normal` mode, do not open every `Recommended Packets` entry in parallel. Skip sessions whose signals are already covered, and target roughly 50-80K tokens of total opened packet content.")
     index.append("- In `deep` mode, inspect additional non-overlapping recommended packets and read more bounded ranges from large packets. Target roughly 75-120K tokens of total opened packet content, but still treat the per-call Read limit as strict.")
+    index.append("- If the user provides a natural-language focus, use Focus Hints, first intents, top files, flags, and targeted grep to find likely packets. Focus can be a skill, feature, command, file area, failure mode, or workflow pattern.")
+    index.append("- Apply chronological caution. Current files, docs, skills, and tests may differ from the versions that existed during older sessions; frame differences as possible evolution or drift unless the packet proves the rule existed at that time.")
     index.append("- Prefer substantive sessions for first-pass packet reading; sample no-op or low-signal sessions only when explaining noise or interruptions.")
     index.append("- Analyze main-session coordination separately from subagent activity.")
     index.append("- Report delegation patterns, friction, useful agent workflows, and missed opportunities.")
@@ -1492,6 +1612,10 @@ def main(argv):
         "totals": aggregate_totals,
         "session_kinds": aggregate_kinds,
         "top_files": dict(list(aggregate_files.items())[:20]),
+        "top_slash_commands": dict(list(aggregate_slash_commands.items())[:20]),
+        "top_skill_base_directories": dict(list(aggregate_skill_base_dirs.items())[:20]),
+        "top_skill_files": dict(list(aggregate_skill_files.items())[:20]),
+        "top_doc_files": dict(list(aggregate_doc_files.items())[:20]),
         "subagent_role_stats": aggregate_subagent_roles,
         "recommended_packets": packet_recommendations,
         "sessions": aggregate_sessions,
