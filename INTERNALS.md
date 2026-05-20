@@ -11,6 +11,7 @@ From the repository root:
 python3 bin/collect-project-packets.py --limit 5 "/path/to/project/branch_*"
 python3 bin/collect-project-packets.py --session-id 45685c9d-0a30-4101-9924-e1eda0abc0c4
 python3 bin/collect-project-packets.py "/path/to/project" latest:3
+python3 bin/collect-project-packets.py --correction-keyword-file /tmp/claude-insights-keywords/correction-keywords-20260520_120000.txt "/path/to/project"
 ```
 
 On Windows, use `py` if that is the configured Python launcher.
@@ -29,6 +30,7 @@ The collector writes a run directory:
 ```text
 data/runs/<timestamp>/
   aggregate.json
+  correction-keywords.txt
   index.md
   next-action.json
   packets/
@@ -64,6 +66,10 @@ top tools, and recommended packet groups.
 It also includes slash command metadata and skill base directories when they are
 visible in the session transcript.
 
+The `correction_keywords` object records the source keyword file, saved run
+copy, keyword count, and actual keyword list used for user-correction candidate
+detection.
+
 The legacy `verification_count` and `error_count` fields refer to the main
 session. Subagent activity is exposed separately as `subagent_*` fields and
 combined totals as `combined_*` fields. Role-level subagent statistics are
@@ -80,6 +86,17 @@ They are not included in build/test `verification_count`.
 Packet sizing metadata is included as `packet_size_bytes`, `packet_line_count`,
 `large_packet`, `very_large_packet`, and `suggested_read_strategy`, so report
 authors can avoid full reads of large packet files.
+
+Per-session `user_correction_examples` contains short user-message excerpts that
+matched the correction keyword list. Treat them as review candidates, not proof
+that the assistant made a mistake.
+
+### `correction-keywords.txt`
+
+The normalized keyword list used for this run. The active assistant creates a
+temporary keyword file before collection; the collector copies the normalized
+English base terms plus run-specific terms into the run directory so self-test
+and later review can see exactly what was used.
 
 ### `packets/<session-id>.md`
 
@@ -179,6 +196,33 @@ shows otherwise.
 
 Avoid hard words such as "violation" unless there is evidence that the rule
 existed at the time and was intended to be strict.
+
+## User-Correction Keywords
+
+Every skill run should create a small temporary keyword file before invoking
+the collector. Use a dedicated temporary directory and a timestamped filename,
+for example
+`/tmp/claude-insights-keywords/correction-keywords-<timestamp>.txt`, so repeated
+runs do not overwrite each other or trigger overwrite prompts.
+
+Include English base terms plus likely synonyms in the user's current language
+or the language visible in the target sessions. Prefer concrete correction
+phrases over short generic words, and avoid terms that mostly indicate ordinary
+design questions.
+
+The keyword file is intentionally lightweight and may vary by run. It improves
+recall for messages such as corrections, misunderstandings, retries, preference
+reversals, or missing requirements. The collector saves the normalized list to
+`data/runs/<timestamp>/correction-keywords.txt` and records it in
+`aggregate.json`.
+
+Because this is keyword-based, false positives are expected. Use the resulting
+`user-correction` flag and `user_correction_examples` as packet-selection hints,
+not as final judgments.
+
+ASCII keywords are matched with word boundaries at the beginning and end when
+they start or end with ASCII word characters. This prevents short terms such as
+`no` from matching inside `not`, while still allowing non-ASCII phrase matching.
 
 ## Self-Test Mode
 

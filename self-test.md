@@ -29,6 +29,9 @@ correctly and whether the previous run followed this skill's workflow.
 ## Required Self-Test Checks
 
 - Confirm exactly one session was packetized.
+- Confirm `correction-keywords.txt` exists in the run directory when correction
+  keywords were used, and that `aggregate.json` records the keyword count and
+  saved file path.
 - Confirm the report includes a short "Expected Intermediate Formats" section
   based on the Python code, not only on generated examples.
 - Confirm `session_kind`, `signal_class`, `top_tools`, and shell commands match
@@ -58,7 +61,7 @@ based on reading `bin/collect-project-packets.py` and
 - `aggregate.json`: top-level `totals`, `session_kinds`,
   `recommended_packets`, `subagent_role_stats`, and `sessions`; per-session
   records should include counts, flags, packet metadata, top files/tools, and
-  subagent summaries.
+  subagent summaries. It should also include `correction_keywords` metadata.
 - `index.md`: Scope, Aggregate Signals, optional Subagent Role Stats, optional
   Large Packets, Recommended Packets, Packetized Sessions, and Report Guidance.
 - `next-action.json`: output directory, index path, aggregate path, packet
@@ -66,6 +69,8 @@ based on reading `bin/collect-project-packets.py` and
 - `packets/<session>.md`: Metadata, Main Intent, Main Timeline, Main Signals,
   optional Notable Main Tool Results, Agent Activity, and Combined Delegation
   Signals.
+- `correction-keywords.txt`: normalized run-local keyword list, if correction
+  keywords were used.
 
 If the generated files do not match this expected shape, report `FAIL` or
 `PASS with warnings` with concrete missing fields or sections.

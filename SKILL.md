@@ -44,10 +44,24 @@ If the user asks for the latest N sessions, pass `--limit N` or include
 
 ## Collector
 
+Before running the collector, create a small temporary correction keyword file
+for this run. Include the English base ideas plus likely synonyms in the user's
+current language or the language visible in the target sessions. This is a
+lightweight hint list for user-correction candidate detection, not a hard
+verdict list. Prefer concrete correction phrases over short generic words; avoid
+terms that mostly indicate ordinary design questions.
+
+Use a unique temporary file path for each run:
+
+```bash
+mkdir -p /tmp/claude-insights-keywords
+KEYWORDS_FILE="/tmp/claude-insights-keywords/correction-keywords-$(date +%Y%m%d_%H%M%S).txt"
+```
+
 Run from this skill directory:
 
 ```bash
-python3 bin/collect-project-packets.py --limit 20 "<path-or-glob>"
+python3 bin/collect-project-packets.py --correction-keyword-file "$KEYWORDS_FILE" --limit 20 "<path-or-glob>"
 ```
 
 Use these defaults:
@@ -60,6 +74,7 @@ Useful optional flags:
 
 ```bash
 --session-id 45685c9d-0a30-4101-9924-e1eda0abc0c4
+--correction-keyword-file "$KEYWORDS_FILE"
 --exclude-noop
 --max-main-lines 180
 --max-agent-lines 80
