@@ -183,6 +183,12 @@ read only the relevant sections.
 Focused reports can use natural-language arguments such as a skill, command,
 feature, file area, failure mode, workflow pattern, or current reference file.
 
+A focus should narrow the question, not the evidence search. In `deep` mode,
+focused reports should still inspect focused packets plus a contrast set:
+adjacent workflows, representative non-focused sessions, and relevant
+error-heavy or verification-heavy sessions. Use the focus to organize the
+analysis and decide what to emphasize, not to shrink the evidence budget.
+
 Current files are latest-state references. They are useful for interpretation,
 but they do not prove that older sessions violated current rules. When comparing
 historical session behavior to current files, frame differences as possible

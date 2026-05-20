@@ -123,6 +123,12 @@ area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,
 identify likely evidence. Read related local files only when they help interpret
 the focus; do not limit this behavior to skill definitions.
 
+A focus narrows the question, not the evidence search. In `deep` mode, keep a
+broad evidence search even for focused reports: inspect focused packets plus a
+contrast set of adjacent workflows, representative non-focused sessions, and
+relevant error-heavy or verification-heavy sessions. Use the focus to organize
+and prioritize the report, not to reduce the evidence budget.
+
 Avoid interrupting focused reports with clarification questions unless the
 focus cannot be identified or a wrong assumption would make the report
 misleading. Prefer writing explicit assumptions and limits, then let the user

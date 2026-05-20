@@ -142,6 +142,9 @@ assistant should use the generated Focus Hints, first intents, top files, and
 selected packets to find relevant evidence, and may read related current project
 files when that helps interpretation. These current files are treated as
 latest-state references, not proof that older sessions violated current rules.
+In `deep` mode, a focus should guide the analysis without shrinking the evidence
+search; focused packets should still be compared with relevant adjacent or
+representative sessions.
 
 Session IDs are supported as full UUIDs or unique UUID prefixes. In session-id
 mode, the cwd path/glob is optional and `--session-id` is used internally. Latest
