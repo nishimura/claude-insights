@@ -116,6 +116,26 @@ For `deep`, inspect additional non-overlapping recommended packets and read
 more bounded ranges from large packets. Target roughly 75-120K tokens of total
 opened packet content, but still treat the per-call Read limit as strict.
 
+In `deep` mode, if subagents are available, keep the main session responsible
+for the primary analysis and final report. Use up to three subagents only as
+second-opinion reviewers, not section writers:
+
+- bad points: friction, missed opportunities, user corrections, repeated
+  failures, weak delegation, and evidence that contradicts an optimistic
+  reading
+- good points: workflows that worked, useful delegation, strong verification,
+  reusable habits, and evidence that contradicts an overly negative reading
+- tool-use quality: all tool usage as a whole, judged by whether it materially
+  advanced the task, produced reliable evidence, avoided needless detours, and
+  correctly separated noisy tool errors from real blockers
+
+For each second-opinion reviewer, pass the relevant packet IDs, specific ranges
+or grep targets, and a reminder not to full-read any packet listed under Large
+Packets. Ask for structured notes with top findings, evidence, why it matters,
+and whether it should change the final report. Do not paste subagent prose
+directly into `report.md`; the main session should incorporate only the useful
+differences and synthesize one consistent report.
+
 If the user provides a natural-language focus, use it to guide packet selection
 and local-file interpretation. The focus may be a skill, command, feature, file
 area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,

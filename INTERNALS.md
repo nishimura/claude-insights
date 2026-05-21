@@ -121,6 +121,26 @@ and end of the file to confirm it is complete.
 Reports use a stable default shape, but the assistant may merge thin sections or
 use subsection headings when that makes the findings clearer.
 
+For `deep` reports, the active assistant may use subagents as second-opinion
+reviewers before writing `report.md`. This is an analysis workflow only; the
+collector output format does not change. The main session still owns the
+primary analysis, packet selection, Large Packet safety, final interpretation,
+and report writing.
+
+Recommended second-opinion reviewers are bad points, good points, and tool-use
+quality. The tool-use reviewer should evaluate all tool usage as a whole: did
+it materially advance the task, produce reliable evidence, avoid needless
+detours, and separate noisy tool errors from real blockers? Do not overemphasize
+minor tool errors unless they changed the solution, caused rework, or exposed a
+recurring workflow problem.
+
+Each reviewer should receive bounded packet IDs, ranges, or grep targets, plus
+an explicit reminder not to full-read packets listed in the Large Packets
+section. Reviewer outputs should be structured notes: top findings, evidence,
+why it matters, and whether it should change the final report. The final report
+should be synthesized by the main session rather than assembled from copied
+subagent prose.
+
 Reports may compare historical sessions with current project files when that
 helps interpretation. Such comparisons should be framed chronologically:
 current files, docs, skills, and tests may differ from the versions that existed
