@@ -52,9 +52,17 @@ correctly and whether the previous run followed this skill's workflow.
 - If the packet contains subagents, verify role names against parent Agent input
   and the first user message; do not trust summary text such as `OK`.
 - For ordinary project reports, confirm internal collector field names and raw
-  diagnostic counts are not placed in the Executive Summary. If the report has
-  `Diagnostics Notes`, check its internal metrics and caveats against
-  `aggregate.json`, `index.md`, and packet evidence.
+  diagnostic counts are not placed in the Executive Summary. When the analyzed
+  session produced a `report.md` and its path is available or inferable, inspect
+  that report's Executive Summary directly. Flag collector-derived totals there
+  as a warning even when they are written in natural language: edit/write totals,
+  verification totals, error totals, subagent error totals, raw/logical
+  transcript counts, active-minute totals, and `role_stats` counts. Counts are
+  acceptable only when they are direct reader-facing project facts, such as the
+  number of sessions reviewed, a domain object count, or a test result like
+  `PHPUnit 8/8 passed`. If the report has `Diagnostics Notes`, check its
+  internal metrics and caveats against `aggregate.json`, `index.md`, and packet
+  evidence.
 
 ## Expected Intermediate Formats
 

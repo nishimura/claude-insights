@@ -157,9 +157,14 @@ subagent prose.
 
 Ordinary project reports should be readable as standalone narratives. Do not
 assume the reader has seen `aggregate.json`, `index.md`, packet metadata, or
-collector field names. Keep raw diagnostic counts and field names out of the
-Executive Summary. Translate internal metrics into reader-facing observations
-in the main sections.
+collector field names. Keep raw diagnostic counts, field names, and
+collector-derived totals out of the Executive Summary. This includes
+edit/write totals, verification totals, error totals, subagent error totals,
+raw/logical transcript counts, active-minute totals, and `role_stats` counts.
+Counts are acceptable in the Executive Summary only when they are direct
+reader-facing project facts, such as the number of sessions reviewed, a domain
+object count, or a test result like `PHPUnit 8/8 passed`. Translate internal
+metrics into reader-facing observations in the main sections.
 
 Use `Diagnostics Notes` for verification-oriented details that are still worth
 preserving: internal counts such as `combined_error_count`, raw vs logical

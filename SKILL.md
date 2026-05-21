@@ -256,9 +256,14 @@ easier to follow.
 For ordinary project reports, write the main narrative so `report.md` is
 understandable on its own. Do not assume the reader has seen `aggregate.json`,
 `index.md`, packet metadata, or internal collector counts. Keep collector field
-names and raw diagnostic counts out of the Executive Summary. Translate them
-into reader-facing observations in the main sections, and put raw fields such
-as `combined_error_count`, `raw_subagent_transcript_count`,
+names and collector-derived totals out of the Executive Summary, including
+edit/write totals, verification totals, error totals, subagent error totals,
+raw/logical transcript counts, active-minute totals, and `role_stats` counts.
+Counts are acceptable in the Executive Summary only when they are direct
+reader-facing project facts, such as the number of sessions reviewed, a domain
+object count, or a test result like `PHPUnit 8/8 passed`. Translate internal
+metrics into reader-facing observations in the main sections, and put raw
+fields such as `combined_error_count`, `raw_subagent_transcript_count`,
 `logical_subagent_role_count`, `large_packet`, or off-chain Agent/Task notes in
 Evidence Used, Diagnostics Notes, or Limits of This Report.
 
