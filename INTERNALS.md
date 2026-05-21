@@ -105,6 +105,11 @@ behavior and includes clipped timelines, tool counts, errors, referenced files,
 shell commands, notable error/verification tool results, verification outcome
 counts, active duration, and subagent outcome hints.
 
+When parallel Agent/Task calls branch the main conversation tree, the selected
+best-chain timeline can omit sibling Agent/Task calls. Packets therefore also
+show the full-session Agent/Task call count and any calls outside the selected
+main chain when those counts differ.
+
 ### `next-action.json`
 
 Machine-readable pointer to the index, output directory, packet count, and
@@ -128,16 +133,25 @@ primary analysis, packet selection, Large Packet safety, final interpretation,
 and report writing.
 
 Recommended second-opinion reviewers are bad points, good points, and tool-use
-quality. The tool-use reviewer should evaluate all tool usage as a whole: did
-it materially advance the task, produce reliable evidence, avoid needless
-detours, and separate noisy tool errors from real blockers? Do not overemphasize
-minor tool errors unless they changed the solution, caused rework, or exposed a
-recurring workflow problem.
+quality. In `deep` mode, use all three when the evidence size justifies it; if a
+reviewer is skipped, note why in report limits or evidence notes. The tool-use
+reviewer should evaluate all tool usage as a whole: did it materially advance
+the task, produce reliable evidence, avoid needless detours, and separate noisy
+tool errors from real blockers? Do not overemphasize minor tool errors unless
+they changed the solution, caused rework, or exposed a recurring workflow
+problem.
 
-Each reviewer should receive bounded packet IDs, ranges, or grep targets, plus
+Each reviewer should receive shared context rather than a narrow answer-shaped
+scope: the run directory, `aggregate.json`, `index.md`, packet list, Large
+Packet entries, and any user-provided focus. The main session may provide
+starting points, but should state that they are not exclusive and that the
+reviewer should choose its own grep targets and bounded ranges. Always include
 an explicit reminder not to full-read packets listed in the Large Packets
-section. Reviewer outputs should be structured notes: top findings, evidence,
-why it matters, and whether it should change the final report. The final report
+section.
+
+Reviewer outputs should be structured notes: top findings, evidence, why it
+matters, whether it should change the final report, and any important evidence
+that contradicts the main session's likely interpretation. The final report
 should be synthesized by the main session rather than assembled from copied
 subagent prose.
 

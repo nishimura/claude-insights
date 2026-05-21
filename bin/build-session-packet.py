@@ -391,6 +391,39 @@ def collect_stats(chain, max_commands):
     }
 
 
+def collect_agent_calls_from_entries(entries):
+    calls = []
+    seen = set()
+    for msg in entries:
+        content = msg.get("message", {}).get("content")
+        if msg.get("type") != "assistant" or not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = str(block.get("name", "unknown"))
+            if name not in ("Agent", "Task"):
+                continue
+            tool_id = block.get("id")
+            key = tool_id if isinstance(tool_id, str) else "%s:%s" % (msg.get("uuid", ""), len(calls))
+            if key in seen:
+                continue
+            seen.add(key)
+            input_data = block.get("input")
+            if not isinstance(input_data, dict):
+                input_data = {}
+            calls.append({
+                "id": key,
+                "timestamp": str(msg.get("timestamp", "")),
+                "tool": name,
+                "subagent_type": str(input_data.get("subagent_type", "")),
+                "name": str(input_data.get("name", "")),
+                "description": str(input_data.get("description", "")),
+                "prompt": one_line(str(input_data.get("prompt", "")), 160),
+            })
+    return calls
+
+
 def format_counts(counts):
     if not counts:
         return "none"
@@ -508,6 +541,14 @@ def main(argv):
         session_id = os.path.splitext(os.path.basename(path))[0]
 
     main_stats = collect_stats(main_chain, args.max_commands)
+    main_chain_agent_ids = set()
+    for call in collect_agent_calls_from_entries(main_chain):
+        main_chain_agent_ids.add(call["id"])
+    all_main_agent_calls = collect_agent_calls_from_entries(loaded["entries"])
+    off_chain_agent_calls = [
+        call for call in all_main_agent_calls
+        if call["id"] not in main_chain_agent_ids
+    ]
     subagent_files = discover_subagent_files(path, session_id)
     agents = []
     for agent_file in subagent_files:
@@ -555,6 +596,9 @@ def main(argv):
     out.append("- Main human user messages: %s" % count_human_users(main_chain))
     out.append("- Main assistant/tool messages: %s" % sum(1 for m in main_chain if m.get("type") == "assistant"))
     out.append("- Main tools: %s" % md_inline(format_counts(main_stats["tools"])))
+    if len(all_main_agent_calls) != main_stats["agentCalls"]:
+        out.append("- Main Agent/Task calls in full session file: %s" % len(all_main_agent_calls))
+        out.append("- Main Agent/Task calls outside selected main chain: %s" % len(off_chain_agent_calls))
     out.append("- Subagents discovered: %s" % len(agents))
     out.append("- Subagent overlap pairs: %s\n" % overlaps)
 
@@ -569,6 +613,22 @@ def main(argv):
 
     out.append("## Main Signals\n")
     out.append("- Agent tool calls in main session: %s" % main_stats["agentCalls"])
+    if len(all_main_agent_calls) != main_stats["agentCalls"]:
+        out.append("- Agent/Task calls in full session file: %s" % len(all_main_agent_calls))
+        out.append("- Agent/Task calls outside selected main chain: %s" % len(off_chain_agent_calls))
+        if off_chain_agent_calls:
+            out.append("- Off-chain Agent/Task calls observed:")
+            for call in off_chain_agent_calls[:10]:
+                label_parts = []
+                for key in ("subagent_type", "name", "description"):
+                    if call.get(key):
+                        label_parts.append("%s=%s" % (key, call[key]))
+                label = ", ".join(label_parts) if label_parts else call.get("prompt", "")
+                out.append("  - `%s` %s at `%s`" % (
+                    md_inline(call["tool"]),
+                    md_inline(label),
+                    md_inline(call["timestamp"]),
+                ))
     out.append("- Main tool errors observed: %s" % main_stats["errors"])
     out.append("- Main verification commands: %s (success %s, failure %s, unknown %s)" % (
         main_stats["verificationCount"],

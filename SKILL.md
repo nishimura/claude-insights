@@ -117,8 +117,10 @@ more bounded ranges from large packets. Target roughly 75-120K tokens of total
 opened packet content, but still treat the per-call Read limit as strict.
 
 In `deep` mode, if subagents are available, keep the main session responsible
-for the primary analysis and final report. Use up to three subagents only as
-second-opinion reviewers, not section writers:
+for the primary analysis and final report. Use three subagents as
+second-opinion reviewers when the evidence size justifies it; if one is skipped,
+state why in the report limits or evidence notes. Reviewers are not section
+writers:
 
 - bad points: friction, missed opportunities, user corrections, repeated
   failures, weak delegation, and evidence that contradicts an optimistic
@@ -129,12 +131,18 @@ second-opinion reviewers, not section writers:
   advanced the task, produced reliable evidence, avoided needless detours, and
   correctly separated noisy tool errors from real blockers
 
-For each second-opinion reviewer, pass the relevant packet IDs, specific ranges
-or grep targets, and a reminder not to full-read any packet listed under Large
-Packets. Ask for structured notes with top findings, evidence, why it matters,
-and whether it should change the final report. Do not paste subagent prose
-directly into `report.md`; the main session should incorporate only the useful
-differences and synthesize one consistent report.
+For each second-opinion reviewer, pass shared context rather than a narrow
+answer-shaped scope: the run directory, `aggregate.json`, `index.md`, the
+packet list, Large Packet entries, and any user-provided focus. You may provide
+starting points, but make clear they are not exclusive and the reviewer should
+choose its own grep targets and bounded ranges. Always remind reviewers not to
+full-read any packet listed under Large Packets.
+
+Ask reviewers for structured notes with top findings, evidence, why it matters,
+whether it should change the final report, and any important evidence that
+contradicts the main session's likely interpretation. Do not paste subagent
+prose directly into `report.md`; the main session should incorporate only the
+useful differences and synthesize one consistent report.
 
 If the user provides a natural-language focus, use it to guide packet selection
 and local-file interpretation. The focus may be a skill, command, feature, file
