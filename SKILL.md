@@ -113,9 +113,11 @@ produce a short report if the evidence is simple.
 - `deep`: add non-overlapping packets and bounded ranges from large packets;
   target roughly 75-120K tokens, while respecting the per-call Read limit.
 
-In `deep` mode, if subagents are available and the evidence size justifies it,
-use up to three second-opinion reviewers. The main session remains responsible
-for primary analysis and the final report. Reviewers are not section writers:
+In `deep` mode, use three second-opinion reviewers when subagents are available
+and there are multiple substantive packets or any Large Packets. If you skip
+reviewers in that case, state the reason in Evidence Used or Limits. The main
+session remains responsible for primary analysis and the final report.
+Reviewers are not section writers:
 
 - bad points: friction, missed opportunities, user corrections, repeated
   failures, weak delegation, and evidence that contradicts an optimistic
@@ -249,9 +251,11 @@ Write ordinary project reports so `report.md` is understandable without
 collector field names and collector-derived totals out of the Executive
 Summary: edit/write totals, verification totals, error totals, subagent error
 totals, raw/logical transcript counts, active-minute totals, and `role_stats`
-counts. Executive Summary counts are acceptable only when they are direct
-reader-facing project facts, such as sessions reviewed, domain object counts,
-or test results like `PHPUnit 8/8 passed`.
+counts. This applies even when the totals are written in natural language, such
+as "main 32 / subagent 14 / total 46 errors." Executive Summary counts are
+acceptable only when they are direct reader-facing project facts, such as
+sessions reviewed, domain object counts, or test results like
+`PHPUnit 8/8 passed`.
 
 Put raw fields and parser caveats in Evidence Used, Diagnostics Notes, or
 Limits of This Report when they matter for verification. A normal reader should
