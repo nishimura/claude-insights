@@ -103,24 +103,19 @@ session context window, so a few bounded reads cost almost no context.
 If a repeated JSON transformation becomes necessary, add a named helper script
 under `bin/` so the behavior is reviewable and reusable.
 
-Modes change the evidence budget and sampling strategy more than the importance
-threshold. `deep` reads more evidence, but it does not guarantee that all
-`brief` or `normal` findings will appear in the final report.
+Modes change evidence budget and sampling strategy, not the kind of conclusion
+you should force. `brief` may still report a severe finding; `deep` may still
+produce a short report if the evidence is simple.
 
-For `brief`, open only the strongest recommended packets, usually 2-4 packets.
-Do not compress high-signal findings just because the mode is brief.
-For `normal`, use more of `recommended_packets`, but do not open every entry in
-parallel. Skip sessions whose signals are already covered by an earlier packet,
-and target roughly 50-80K tokens of total opened packet content.
-For `deep`, inspect additional non-overlapping recommended packets and read
-more bounded ranges from large packets. Target roughly 75-120K tokens of total
-opened packet content, but still treat the per-call Read limit as strict.
+- `brief`: open the strongest 2-4 recommended packets.
+- `normal`: cover the main recommended packets without opening duplicates;
+  target roughly 50-80K tokens of opened packet content.
+- `deep`: add non-overlapping packets and bounded ranges from large packets;
+  target roughly 75-120K tokens, while respecting the per-call Read limit.
 
-In `deep` mode, if subagents are available, keep the main session responsible
-for the primary analysis and final report. Use three subagents as
-second-opinion reviewers when the evidence size justifies it; if one is skipped,
-state why in the report limits or evidence notes. Reviewers are not section
-writers:
+In `deep` mode, if subagents are available and the evidence size justifies it,
+use up to three second-opinion reviewers. The main session remains responsible
+for primary analysis and the final report. Reviewers are not section writers:
 
 - bad points: friction, missed opportunities, user corrections, repeated
   failures, weak delegation, and evidence that contradicts an optimistic
@@ -131,18 +126,15 @@ writers:
   advanced the task, produced reliable evidence, avoided needless detours, and
   correctly separated noisy tool errors from real blockers
 
-For each second-opinion reviewer, pass shared context rather than a narrow
-answer-shaped scope: the run directory, `aggregate.json`, `index.md`, the
-packet list, Large Packet entries, and any user-provided focus. You may provide
-starting points, but make clear they are not exclusive and the reviewer should
-choose its own grep targets and bounded ranges. Always remind reviewers not to
-full-read any packet listed under Large Packets.
+Give reviewers shared context rather than an answer-shaped scope: the run
+directory, `aggregate.json`, `index.md`, packet list, Large Packet entries, and
+any user-provided focus. Starting points are allowed but non-exclusive. Remind
+reviewers to choose their own grep targets and bounded ranges, and never
+full-read Large Packets.
 
-Ask reviewers for structured notes with top findings, evidence, why it matters,
-whether it should change the final report, and any important evidence that
-contradicts the main session's likely interpretation. Do not paste subagent
-prose directly into `report.md`; the main session should incorporate only the
-useful differences and synthesize one consistent report.
+Ask reviewers for top findings, evidence, importance, and contradictions. Do
+not paste reviewer prose into `report.md`; incorporate only supported findings
+that materially change or strengthen the final report.
 
 If the user provides a natural-language focus, use it to guide packet selection
 and local-file interpretation. The focus may be a skill, command, feature, file
@@ -151,11 +143,10 @@ area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,
 identify likely evidence. Read related local files only when they help interpret
 the focus; do not limit this behavior to skill definitions.
 
-A focus narrows the question, not the evidence search. In `deep` mode, keep a
-broad evidence search even for focused reports: inspect focused packets plus a
-contrast set of adjacent workflows, representative non-focused sessions, and
-relevant error-heavy or verification-heavy sessions. Use the focus to organize
-and prioritize the report, not to reduce the evidence budget.
+A focus narrows the question, not the evidence search. In `deep` mode, inspect
+focused packets plus a small contrast set of adjacent, representative,
+error-heavy, or verification-heavy sessions. Use the focus to organize the
+report, not to pre-answer it.
 
 Avoid interrupting focused reports with clarification questions unless the
 focus cannot be identified or a wrong assumption would make the report
@@ -222,7 +213,7 @@ can include repeated context from resumed agents.
 
 ## Report Shape
 
-Use these sections unless the user asks otherwise:
+Start from this section set unless the user asks otherwise:
 
 ```markdown
 # Session Insights Report
@@ -248,35 +239,23 @@ Use these sections unless the user asks otherwise:
 ## Limits of This Report
 ```
 
-Use the report shape as a default, not a rigid form. Keep the major sections
-stable when they are useful. Merge or shorten sections that would be empty. Use
-subsection headings inside a major section when they make high-signal findings
-easier to follow.
+These sections are defaults, not quotas. Do not invent weak positives,
+negatives, or improvements to fill them. Merge, shorten, or omit sections that
+have no material evidence. Use subsection headings only when they make
+high-signal findings easier to follow.
 
-For ordinary project reports, write the main narrative so `report.md` is
-understandable on its own. Do not assume the reader has seen `aggregate.json`,
-`index.md`, packet metadata, or internal collector counts. Keep collector field
-names and collector-derived totals out of the Executive Summary, including
-edit/write totals, verification totals, error totals, subagent error totals,
-raw/logical transcript counts, active-minute totals, and `role_stats` counts.
-Counts are acceptable in the Executive Summary only when they are direct
-reader-facing project facts, such as the number of sessions reviewed, a domain
-object count, or a test result like `PHPUnit 8/8 passed`. Translate internal
-metrics into reader-facing observations in the main sections, and put raw
-fields such as `combined_error_count`, `raw_subagent_transcript_count`,
-`logical_subagent_role_count`, `large_packet`, or off-chain Agent/Task notes in
-Evidence Used, Diagnostics Notes, or Limits of This Report.
+Write ordinary project reports so `report.md` is understandable without
+`aggregate.json`, `index.md`, packet metadata, or collector counts. Keep
+collector field names and collector-derived totals out of the Executive
+Summary: edit/write totals, verification totals, error totals, subagent error
+totals, raw/logical transcript counts, active-minute totals, and `role_stats`
+counts. Executive Summary counts are acceptable only when they are direct
+reader-facing project facts, such as sessions reviewed, domain object counts,
+or test results like `PHPUnit 8/8 passed`.
 
-Use `Diagnostics Notes` when internal metrics or parser caveats are useful for
-verification but would distract from the project narrative. Self-test may check
-Diagnostics Notes for consistency with `aggregate.json`, `index.md`, and the
-packets, but a normal reader should understand the report without reading that
-section.
-
-For `brief`, limit evidence scope rather than finding importance. For `normal`,
-include the main evidence and representative packet IDs. For `deep`, include
-more evidence and more packet IDs, but still summarize rather than pasting
-packet content.
+Put raw fields and parser caveats in Evidence Used, Diagnostics Notes, or
+Limits of This Report when they matter for verification. A normal reader should
+not need those sections to understand the report.
 
 For focused or chronology-sensitive reports, prefer evidence-backed
 observations and hypotheses over hard verdicts. Include assumptions and
@@ -288,13 +267,3 @@ validate the interpretation.
 If the user invokes `/claude-insights self-test ...`, read
 [self-test.md](self-test.md) for the full self-test workflow, required checks,
 and verdict format. Do not load this file for ordinary project reports.
-
-## Future Experiment
-
-Do not add `context: fork` yet. It should be tested separately after this
-slash-skill workflow is stable. Useful questions to test:
-
-- whether a forked skill can use subagents or team/fork features recursively
-- whether forked analysis improves report quality
-- whether intermediate files can be simplified if recursive subagent analysis is reliable
-- how forked skill execution appears in Claude Code logs when analyzed by this tool
