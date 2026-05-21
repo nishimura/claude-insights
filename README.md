@@ -63,6 +63,9 @@ start from a dedicated session when you want a cleaner analysis context.
 - Produces an `aggregate.json` with first intents, session kinds, signal
   classes, edit/write counts, verification counts, errors, interruptions,
   subagent transcript counts, logical role counts, and top files.
+- In `deep` mode, the active assistant may use second-opinion subagents for
+  bad points, good points, and tool-use quality while keeping the main session
+  responsible for final synthesis.
 - Leaves final interpretation to the active assistant conversation, rather than
   starting a separate analysis process.
 
@@ -72,6 +75,8 @@ start from a dedicated session when you want a cleaner analysis context.
 claude-insights/
   SKILL.md
   README.md
+  INTERNALS.md
+  self-test.md
   bin/
     collect-project-packets.py
     build-session-packet.py
@@ -129,6 +134,12 @@ Default report mode is `normal`, which uses the previous detailed profile.
 Use `brief` only for a lightweight pass. Use `detailed` / `deep` / `thorough`
 when you want a deeper pass that reads more packet evidence without full-reading
 large packets.
+
+When `deep` mode has enough evidence and subagents are available, the assistant
+may use up to three second-opinion reviewers: bad points, good points, and
+tool-use quality. These reviewers are not section writers. They receive shared
+run context and Large Packet constraints, choose their own bounded ranges or
+grep targets, and return notes for the main assistant to synthesize.
 
 Modes are not strictly hierarchical. `deep` reads more evidence, but it does
 not fully contain `brief` or `normal`: different sampling can emphasize
