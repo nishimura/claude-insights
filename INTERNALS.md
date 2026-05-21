@@ -155,6 +155,20 @@ that contradicts the main session's likely interpretation. The final report
 should be synthesized by the main session rather than assembled from copied
 subagent prose.
 
+Ordinary project reports should be readable as standalone narratives. Do not
+assume the reader has seen `aggregate.json`, `index.md`, packet metadata, or
+collector field names. Keep raw diagnostic counts and field names out of the
+Executive Summary. Translate internal metrics into reader-facing observations
+in the main sections.
+
+Use `Diagnostics Notes` for verification-oriented details that are still worth
+preserving: internal counts such as `combined_error_count`, raw vs logical
+subagent counts, Large Packet handling, off-chain Agent/Task call caveats,
+second-opinion reviewer count or scope caveats, and differences between
+reviewer-derived counts and collector counts. `Evidence Used`, `Diagnostics
+Notes`, and `Limits of This Report` are the right places for these references;
+the Executive Summary is not.
+
 Reports may compare historical sessions with current project files when that
 helps interpretation. Such comparisons should be framed chronologically:
 current files, docs, skills, and tests may differ from the versions that existed
@@ -180,6 +194,8 @@ during older sessions.
 ## Improvements to Try
 
 ## Evidence Used
+
+## Diagnostics Notes
 
 ## Limits of This Report
 ```

@@ -51,6 +51,10 @@ correctly and whether the previous run followed this skill's workflow.
   or suspicious unknown block types.
 - If the packet contains subagents, verify role names against parent Agent input
   and the first user message; do not trust summary text such as `OK`.
+- For ordinary project reports, confirm internal collector field names and raw
+  diagnostic counts are not placed in the Executive Summary. If the report has
+  `Diagnostics Notes`, check its internal metrics and caveats against
+  `aggregate.json`, `index.md`, and packet evidence.
 
 ## Expected Intermediate Formats
 

@@ -66,6 +66,8 @@ start from a dedicated session when you want a cleaner analysis context.
 - In `deep` mode, the active assistant may use second-opinion subagents for
   bad points, good points, and tool-use quality while keeping the main session
   responsible for final synthesis.
+- Keeps the main report narrative readable on its own, while preserving raw
+  collector metrics and parser caveats in evidence or diagnostics sections.
 - Leaves final interpretation to the active assistant conversation, rather than
   starting a separate analysis process.
 

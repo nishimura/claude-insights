@@ -243,6 +243,8 @@ Use these sections unless the user asks otherwise:
 
 ## Evidence Used
 
+## Diagnostics Notes
+
 ## Limits of This Report
 ```
 
@@ -250,6 +252,21 @@ Use the report shape as a default, not a rigid form. Keep the major sections
 stable when they are useful. Merge or shorten sections that would be empty. Use
 subsection headings inside a major section when they make high-signal findings
 easier to follow.
+
+For ordinary project reports, write the main narrative so `report.md` is
+understandable on its own. Do not assume the reader has seen `aggregate.json`,
+`index.md`, packet metadata, or internal collector counts. Keep collector field
+names and raw diagnostic counts out of the Executive Summary. Translate them
+into reader-facing observations in the main sections, and put raw fields such
+as `combined_error_count`, `raw_subagent_transcript_count`,
+`logical_subagent_role_count`, `large_packet`, or off-chain Agent/Task notes in
+Evidence Used, Diagnostics Notes, or Limits of This Report.
+
+Use `Diagnostics Notes` when internal metrics or parser caveats are useful for
+verification but would distract from the project narrative. Self-test may check
+Diagnostics Notes for consistency with `aggregate.json`, `index.md`, and the
+packets, but a normal reader should understand the report without reading that
+section.
 
 For `brief`, limit evidence scope rather than finding importance. For `normal`,
 include the main evidence and representative packet IDs. For `deep`, include
