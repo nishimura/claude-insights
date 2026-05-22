@@ -112,11 +112,25 @@ produce a short report if the evidence is simple.
 - `deep`: add non-overlapping packets and bounded ranges from large packets;
   target roughly 75-120K tokens, while respecting the per-call Read limit.
 
-In `deep` mode, use three second-opinion reviewers when subagents are available
-and there are multiple substantive packets or any Large Packets. If you skip
-reviewers in that case, state the reason in Evidence Used or Limits. The main
-session remains responsible for primary analysis and the final report.
-Reviewers are not section writers:
+If the user provides a natural-language focus, use it to guide packet selection
+and local-file interpretation. The focus may be a skill, command, feature, file
+area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,
+`index.md` Focus Hints, first intents, top files, flags, and targeted grep to
+identify likely evidence. Read related local files only when they help interpret
+the focus; do not limit this behavior to skill definitions.
+
+A focus narrows the question, not the evidence search. Use the focus to
+organize the report, not to pre-answer it.
+
+## Deep Mode Only
+
+Skip this entire section unless mode is `deep`.
+
+Use three second-opinion reviewers when subagents are available and there are
+multiple substantive packets or any Large Packets. If you skip reviewers in
+that case, state the reason in Evidence Used or Limits. The main session
+remains responsible for primary analysis and the final report. Reviewers are
+not section writers:
 
 - bad points: friction, missed opportunities, user corrections, repeated
   failures, weak delegation, and evidence that contradicts an optimistic
@@ -137,8 +151,8 @@ Ask reviewers for top findings, evidence, importance, and contradictions. Do
 not paste reviewer prose into `report.md`; incorporate only supported findings
 that materially change or strengthen the final report.
 
-In `deep` mode, write `findings.md` in the run directory before `report.md`.
-This is a discovery ledger, not a polished report. Include:
+Write `findings.md` in the run directory before `report.md`. This is a
+discovery ledger, not a polished report. Include:
 
 - discovery checks performed, including user corrections, verification
   outcomes, blockers, delegation failures, knowledge persistence or repeated
@@ -155,17 +169,10 @@ finding only to keep `report.md` short or balanced. If it would make the main
 narrative too long, preserve it in Evidence Used, Diagnostics Notes, or Limits
 and mark that placement in `findings.md`.
 
-If the user provides a natural-language focus, use it to guide packet selection
-and local-file interpretation. The focus may be a skill, command, feature, file
-area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,
-`index.md` Focus Hints, first intents, top files, flags, and targeted grep to
-identify likely evidence. Read related local files only when they help interpret
-the focus; do not limit this behavior to skill definitions.
+For focused reports, inspect focused packets plus a small contrast set of
+adjacent, representative, error-heavy, or verification-heavy sessions.
 
-A focus narrows the question, not the evidence search. In `deep` mode, inspect
-focused packets plus a small contrast set of adjacent, representative,
-error-heavy, or verification-heavy sessions. Use the focus to organize the
-report, not to pre-answer it.
+## General Report Guidance
 
 Avoid interrupting focused reports with clarification questions unless the
 focus cannot be identified or a wrong assumption would make the report

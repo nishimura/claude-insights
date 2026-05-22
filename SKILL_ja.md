@@ -90,7 +90,15 @@ mode は evidence budget と sampling strategy を変えるものであり、結
 - `normal`: 重複を開かず、主要な recommended packets を cover する。opened packet content はおおよそ 50-80K token を目安にする。
 - `deep`: non-overlapping packet と Large Packet の bounded range を追加する。per-call Read limit を守りつつ、75-120K token 程度を目安にする。
 
-`deep` mode では、subagent が利用可能で、複数の substantive packets または Large Packets がある場合、3 名の second-opinion reviewers を使う。その条件で reviewers を skip する場合は、理由を Evidence Used または Limits に書く。main session が primary analysis と final report に責任を持つ。reviewers は section writers ではない。
+ユーザーが natural-language focus を指定した場合は、それを packet selection と local-file interpretation の guide にする。focus は skill、command、feature、file area、failure mode、workflow pattern、その他の topic でありうる。`aggregate.json`、`index.md` Focus Hints、first intents、top files、flags、targeted grep を使って likely evidence を特定する。関連する local files は focus 解釈に役立つ場合のみ読む。この挙動を skill definitions に限定しない。
+
+focus は問いを狭めるが、evidence search を狭めるものではない。focus は report を整理するために使い、先に答えを決めるために使わない。
+
+## Deep Mode Only
+
+mode が `deep` でない場合、この section 全体を skip する。
+
+subagent が利用可能で、複数の substantive packets または Large Packets がある場合、3 名の second-opinion reviewers を使う。その条件で reviewers を skip する場合は、理由を Evidence Used または Limits に書く。main session が primary analysis と final report に責任を持つ。reviewers は section writers ではない。
 
 - bad points: friction、missed opportunities、user corrections、repeated failures、weak delegation、楽観的な読みを覆す evidence
 - good points: うまく機能した workflow、有用な delegation、強い verification、再利用可能な習慣、過度に否定的な読みを覆す evidence
@@ -100,7 +108,7 @@ reviewers には answer-shaped scope ではなく shared context を渡す: run 
 
 reviewers には top findings、evidence、importance、contradictions を求める。reviewer prose を `report.md` に貼り付けない。final report を変える、または強める supported findings だけを取り込む。
 
-`deep` mode では、`report.md` の前に run directory に `findings.md` を書く。これは polished report ではなく discovery ledger。含めるもの:
+`report.md` の前に run directory に `findings.md` を書く。これは polished report ではなく discovery ledger。含めるもの:
 
 - 実施した discovery checks。user corrections、verification outcomes、blockers、delegation failures、knowledge persistence または repeated learned facts、user interruptions または unnecessary stops、Large Packet handling、focus-specific checks を含む
 - stable ID、claim、evidence、impact、source（`main`、reviewer name、または両方）、intended report placement を持つ candidate findings
@@ -108,9 +116,9 @@ reviewers には top findings、evidence、importance、contradictions を求め
 
 material findings については、短さより網羅性を優先する。`report.md` を短く、またはバランスよく保つためだけに supported finding を落とさない。main narrative が長くなりすぎる場合は、Evidence Used、Diagnostics Notes、Limits に残し、その placement を `findings.md` に記録する。
 
-ユーザーが natural-language focus を指定した場合は、それを packet selection と local-file interpretation の guide にする。focus は skill、command、feature、file area、failure mode、workflow pattern、その他の topic でありうる。`aggregate.json`、`index.md` Focus Hints、first intents、top files、flags、targeted grep を使って likely evidence を特定する。関連する local files は focus 解釈に役立つ場合のみ読む。この挙動を skill definitions に限定しない。
+focused reports では、focused packets に加えて、adjacent、representative、error-heavy、verification-heavy な sessions の小さな contrast set を見る。
 
-focus は問いを狭めるが、evidence search を狭めるものではない。`deep` mode では、focused packets に加えて、adjacent、representative、error-heavy、verification-heavy な sessions の小さな contrast set を見る。focus は report を整理するために使い、先に答えを決めるために使わない。
+## General Report Guidance
 
 focused reports では、focus が特定できない、または誤った仮定が report を misleading にする場合を除き、clarification question で中断しない。明示的な assumptions と limits を書き、follow-up でユーザーに補正してもらうことを優先する。
 
