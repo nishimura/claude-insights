@@ -138,6 +138,24 @@ Ask reviewers for top findings, evidence, importance, and contradictions. Do
 not paste reviewer prose into `report.md`; incorporate only supported findings
 that materially change or strengthen the final report.
 
+In `deep` mode, write `findings.md` in the run directory before `report.md`.
+This is a discovery ledger, not a polished report. Include:
+
+- discovery checks performed, including user corrections, verification
+  outcomes, blockers, delegation failures, knowledge persistence or repeated
+  learned facts, user interruptions or unnecessary stops, Large Packet handling,
+  and any focus-specific checks
+- candidate findings with stable IDs, claim, evidence, impact, source
+  (`main`, reviewer name, or both), and intended report placement
+- final status after `report.md` is written: `included`, `diagnostics`,
+  `evidence_only`, `limits`, `omitted_low_materiality`, `omitted_unverified`,
+  or `contradicted`
+
+Prefer completeness over brevity for material findings. Do not drop a supported
+finding only to keep `report.md` short or balanced. If it would make the main
+narrative too long, preserve it in Evidence Used, Diagnostics Notes, or Limits
+and mark that placement in `findings.md`.
+
 If the user provides a natural-language focus, use it to guide packet selection
 and local-file interpretation. The focus may be a skill, command, feature, file
 area, failure mode, workflow pattern, or other topic. Use `aggregate.json`,

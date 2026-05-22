@@ -155,6 +155,18 @@ that contradicts the main session's likely interpretation. The final report
 should be synthesized by the main session rather than assembled from copied
 subagent prose.
 
+For `deep` reports, the assistant should write `findings.md` before
+`report.md`. This file is a discovery ledger, not a collector output and not a
+polished report. It records which discovery checks were performed, the
+candidate findings found by the main session or reviewers, each finding's
+evidence and impact, and the final placement decision after `report.md` is
+written.
+
+Use final statuses such as `included`, `diagnostics`, `evidence_only`, `limits`,
+`omitted_low_materiality`, `omitted_unverified`, and `contradicted`. The goal is
+to separate discovery from report synthesis: material findings should not
+disappear only because the final report is concise.
+
 Ordinary project reports should be readable as standalone narratives. Do not
 assume the reader has seen `aggregate.json`, `index.md`, packet metadata, or
 collector field names. Keep raw diagnostic counts, field names, and
