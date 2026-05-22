@@ -9,9 +9,7 @@ disable-model-invocation: true
 
 このファイルは `SKILL.md` の日本語訳。実行用の skill 定義は英語の `SKILL.md` を正とし、この訳文も今後あわせて更新する。
 
-この skill は `/claude-insights ...` として明示的に起動する。
-
-通常会話からこの workflow を自動実行しない。この tool は Claude Code の transcript file を分析するため、最終 report 作成ステップは Claude Code runtime が推奨。
+指定された cwd/path glob に対応する Claude Code セッション履歴を分析し、検査可能な Markdown report を書く。workflow は packet files を収集し、選択した evidence を読み、必要なら `deep` mode reviewers を使い、`deep` run では `findings.md` を書いてから `report.md` を作成・検証する。
 
 ## Arguments
 

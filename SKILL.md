@@ -7,11 +7,10 @@ disable-model-invocation: true
 
 # Claude Insights
 
-Invoke this skill explicitly as `/claude-insights ...`.
-
-Do not run this workflow automatically from ordinary conversation. This tool
-analyzes Claude Code transcript files, so Claude Code is the recommended runtime
-for the final report step.
+Analyze Claude Code session history for a specified cwd/path glob and write an
+inspectable Markdown report. The workflow collects packet files, reads selected
+evidence, optionally uses `deep`-mode reviewers, writes `findings.md` for
+`deep` runs, then writes and verifies `report.md`.
 
 ## Arguments
 
