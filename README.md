@@ -59,10 +59,12 @@ start from a dedicated session when you want a cleaner analysis context.
   - tool counts
   - referenced files and shell commands
   - delegation and error signals
+  - model-invocation signals for `TeamCreate`, `Agent`, and `Task`
 - Produces an `index.md` so the assistant can read only the packets it needs.
 - Produces an `aggregate.json` with first intents, session kinds, signal
   classes, edit/write counts, verification counts, errors, interruptions,
-  subagent transcript counts, logical role counts, and top files.
+  subagent transcript counts, logical role counts, model-invocation tool
+  signals, assistant model distribution, and top files.
 - In `deep` mode, the active assistant may use second-opinion subagents for
   bad points, good points, and tool-use quality while keeping the main session
   responsible for final synthesis.

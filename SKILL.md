@@ -237,6 +237,14 @@ Subagent tool counts are de-duplicated by tool_use ID. Prefer
 `active_minutes_union` for elapsed role activity; `active_minutes_cumulative`
 can include repeated context from resumed agents.
 
+For model-selection analysis, inspect `model_invocation_calls`,
+`main_assistant_models`, `subagent_assistant_models`, and top-level
+`top_model_invocation_*` fields. The assistant message `model` identifies which
+model issued a `TeamCreate`, `Agent`, or `Task` tool call; it is not proof of an
+explicit model selection inside the tool input. Only treat explicit selection as
+observed when `model_invocation_tools_with_model_field_count` or
+`model_invocation_model_fields` shows a `model*` input key.
+
 ## Report Shape
 
 Start from this section set unless the user asks otherwise:

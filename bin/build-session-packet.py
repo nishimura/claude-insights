@@ -27,6 +27,7 @@ REPORT_VERIFY_RE = re.compile(
 )
 FAILURE_RE = re.compile(r"(fail|failed|failure|error|exit code [1-9]|not ok|fatal|exception)", re.IGNORECASE)
 SUCCESS_RE = re.compile(r"(success|successful|passed|passing|ok|no errors|0 failures|0 errors)", re.IGNORECASE)
+MODEL_INVOCATION_TOOLS = ("TeamCreate", "Agent", "Task")
 
 
 def usage():
@@ -45,6 +46,44 @@ def clip_text(text, length):
 
 def one_line(text, length):
     return clip_text(" ".join(text.strip().split()), length)
+
+
+def clip_model_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return one_line(str(value), 120)
+    return one_line(json.dumps(value, ensure_ascii=False), 120)
+
+
+def collect_model_fields(value, prefix="", depth=0):
+    if depth > 4:
+        return {}
+    fields = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            path = key_text if not prefix else prefix + "." + key_text
+            if "model" in key_text.lower():
+                fields[path] = clip_model_value(child)
+            fields.update(collect_model_fields(child, path, depth + 1))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value[:20]):
+            path = "%s[%s]" % (prefix, idx) if prefix else "[%s]" % idx
+            fields.update(collect_model_fields(child, path, depth + 1))
+    return fields
+
+
+def assistant_model_from_entry(entry):
+    message = entry.get("message")
+    if not isinstance(message, dict):
+        return ""
+    model = message.get("model")
+    return str(model) if isinstance(model, str) and model else ""
+
+
+def format_model_fields(fields):
+    if not fields:
+        return "none"
+    return ", ".join("%s=%s" % (key, value) for key, value in sorted(fields.items()))
 
 
 def md_inline(text):
@@ -279,6 +318,7 @@ def classify_verification_result(text, is_error):
 
 def collect_stats(chain, max_commands):
     tools = {}
+    assistant_models = {}
     files = {}
     commands = []
     errors = 0
@@ -295,16 +335,35 @@ def collect_stats(chain, max_commands):
     report_verification_failure_count = 0
     report_verification_unknown_count = 0
     send_message_count = 0
+    model_invocation_calls = []
 
     for msg in chain:
         content = msg.get("message", {}).get("content")
         if msg.get("type") == "assistant" and isinstance(content, list):
+            assistant_model = assistant_model_from_entry(msg)
+            if assistant_model:
+                assistant_models[assistant_model] = assistant_models.get(assistant_model, 0) + 1
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 name = str(block.get("name", "unknown"))
                 tool_id = block.get("id")
                 tools[name] = tools.get(name, 0) + 1
+                if name in MODEL_INVOCATION_TOOLS:
+                    input_data = block.get("input")
+                    if not isinstance(input_data, dict):
+                        input_data = {}
+                    model_invocation_calls.append({
+                        "timestamp": str(msg.get("timestamp", "")),
+                        "tool": name,
+                        "assistant_model": assistant_model,
+                        "team_name": str(input_data.get("team_name", "")),
+                        "agent_type": str(input_data.get("agent_type", "")),
+                        "subagent_type": str(input_data.get("subagent_type", "")),
+                        "name": str(input_data.get("name", "")),
+                        "description": one_line(str(input_data.get("description", "")), 120),
+                        "model_fields": collect_model_fields(input_data),
+                    })
                 if name in ("Agent", "Task"):
                     agent_calls += 1
                 if name == "SendMessage":
@@ -373,6 +432,7 @@ def collect_stats(chain, max_commands):
 
     return {
         "tools": dict(sorted(tools.items(), key=lambda item: (-item[1], item[0]))),
+        "assistantModels": dict(sorted(assistant_models.items(), key=lambda item: (-item[1], item[0]))),
         "files": files,
         "commands": commands,
         "errors": errors,
@@ -388,6 +448,7 @@ def collect_stats(chain, max_commands):
         "reportVerificationFailureCount": report_verification_failure_count,
         "reportVerificationUnknownCount": report_verification_unknown_count,
         "sendMessageCount": send_message_count,
+        "modelInvocationCalls": model_invocation_calls[:30],
     }
 
 
@@ -416,9 +477,13 @@ def collect_agent_calls_from_entries(entries):
                 "id": key,
                 "timestamp": str(msg.get("timestamp", "")),
                 "tool": name,
+                "assistant_model": assistant_model_from_entry(msg),
+                "team_name": str(input_data.get("team_name", "")),
+                "agent_type": str(input_data.get("agent_type", "")),
                 "subagent_type": str(input_data.get("subagent_type", "")),
                 "name": str(input_data.get("name", "")),
                 "description": str(input_data.get("description", "")),
+                "model_fields": collect_model_fields(input_data),
                 "prompt": one_line(str(input_data.get("prompt", "")), 160),
             })
     return calls
@@ -435,10 +500,13 @@ def format_agent_tool_details(block):
     if not isinstance(input_data, dict):
         return ""
     parts = []
-    for key in ("subagent_type", "name", "description", "prompt"):
+    for key in ("team_name", "agent_type", "subagent_type", "name", "description", "prompt"):
         value = input_data.get(key)
         if isinstance(value, str) and value.strip():
             parts.append('%s="%s"' % (key, md_inline(one_line(value, 260 if key == "prompt" else 160))))
+    model_fields = collect_model_fields(input_data)
+    for key, value in sorted(model_fields.items()):
+        parts.append('%s="%s"' % (key, md_inline(value)))
     return "" if not parts else " " + " ".join(parts)
 
 
@@ -469,7 +537,7 @@ def timeline_lines(chain, max_lines, agent_details):
                         lines.append("[Assistant]: " + clip_text(text, ASSISTANT_CLIP))
                 elif block.get("type") == "tool_use":
                     name = str(block.get("name", "unknown"))
-                    detail = format_agent_tool_details(block) if agent_details and name in ("Agent", "Task") else ""
+                    detail = format_agent_tool_details(block) if agent_details and name in MODEL_INVOCATION_TOOLS else ""
                     lines.append("[Tool: %s]%s" % (name, detail))
     return lines
 
@@ -596,6 +664,7 @@ def main(argv):
     out.append("- Main human user messages: %s" % count_human_users(main_chain))
     out.append("- Main assistant/tool messages: %s" % sum(1 for m in main_chain if m.get("type") == "assistant"))
     out.append("- Main tools: %s" % md_inline(format_counts(main_stats["tools"])))
+    out.append("- Main assistant models: %s" % md_inline(format_counts(main_stats["assistantModels"])))
     if len(all_main_agent_calls) != main_stats["agentCalls"]:
         out.append("- Main Agent/Task calls in full session file: %s" % len(all_main_agent_calls))
         out.append("- Main Agent/Task calls outside selected main chain: %s" % len(off_chain_agent_calls))
@@ -613,6 +682,24 @@ def main(argv):
 
     out.append("## Main Signals\n")
     out.append("- Agent tool calls in main session: %s" % main_stats["agentCalls"])
+    out.append("- Model-invocation tool calls in main session: %s" % len(main_stats["modelInvocationCalls"]))
+    if main_stats["modelInvocationCalls"]:
+        out.append("- Model-invocation calls observed:")
+        for call in main_stats["modelInvocationCalls"][:12]:
+            labels = []
+            for key in ("team_name", "agent_type", "subagent_type", "name", "description"):
+                if call.get(key):
+                    labels.append("%s=%s" % (key, call[key]))
+            if call.get("model_fields"):
+                labels.append("model_fields=%s" % format_model_fields(call["model_fields"]))
+            else:
+                labels.append("model_fields=none")
+            out.append("  - `%s` at `%s`, assistant_model=`%s`, %s" % (
+                md_inline(call["tool"]),
+                md_inline(call["timestamp"]),
+                md_inline(call["assistant_model"] or "unknown"),
+                md_inline(", ".join(labels)),
+            ))
     if len(all_main_agent_calls) != main_stats["agentCalls"]:
         out.append("- Agent/Task calls in full session file: %s" % len(all_main_agent_calls))
         out.append("- Agent/Task calls outside selected main chain: %s" % len(off_chain_agent_calls))
@@ -620,9 +707,11 @@ def main(argv):
             out.append("- Off-chain Agent/Task calls observed:")
             for call in off_chain_agent_calls[:10]:
                 label_parts = []
-                for key in ("subagent_type", "name", "description"):
+                for key in ("team_name", "agent_type", "subagent_type", "name", "description"):
                     if call.get(key):
                         label_parts.append("%s=%s" % (key, call[key]))
+                if call.get("model_fields"):
+                    label_parts.append("model_fields=%s" % format_model_fields(call["model_fields"]))
                 label = ", ".join(label_parts) if label_parts else call.get("prompt", "")
                 out.append("  - `%s` %s at `%s`" % (
                     md_inline(call["tool"]),
@@ -682,6 +771,7 @@ def main(argv):
             out.append("- Human/task messages: %s" % count_human_users(chain))
             out.append("- Assistant/tool messages: %s" % sum(1 for m in chain if m.get("type") == "assistant"))
             out.append("- Tools: %s" % md_inline(format_counts(stats["tools"])))
+            out.append("- Assistant models: %s" % md_inline(format_counts(stats["assistantModels"])))
             out.append("- Tool errors observed: %s" % stats["errors"])
             out.append("- Verification commands: %s (success %s, failure %s, unknown %s)" % (
                 stats["verificationCount"],
@@ -731,8 +821,14 @@ def main(argv):
     out.append("- Subagent overlap pairs, based on transcript time ranges: %s" % overlaps)
     agent_errors = sum(agent["stats"]["errors"] for agent in agents)
     agent_interruptions = sum(1 for agent in agents if agent["stats"]["interrupted"])
+    agent_models = {}
+    for agent in agents:
+        for model, count in agent["stats"]["assistantModels"].items():
+            agent_models[model] = agent_models.get(model, 0) + count
+    agent_models = dict(sorted(agent_models.items(), key=lambda item: (-item[1], item[0])))
     out.append("- Total subagent tool errors observed: %s" % agent_errors)
     out.append("- Subagents interrupted by user: %s" % agent_interruptions)
+    out.append("- Subagent assistant models: %s" % md_inline(format_counts(agent_models)))
 
     sys.stdout.write("\n".join(out) + "\n")
     return 0

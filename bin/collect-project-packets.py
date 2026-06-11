@@ -43,6 +43,7 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.IGNORE
 UUID_PREFIX_RE = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){0,3}(?:-[0-9a-f]{0,12})?$", re.IGNORECASE)
 LATEST_RE = re.compile(r"^latest:(\d+)$", re.IGNORECASE)
 SKILL_BASE_RE = re.compile(r"Base directory for this skill:\s*(\S+)")
+MODEL_INVOCATION_TOOLS = ("TeamCreate", "Agent", "Task")
 
 
 def expand_home(path):
@@ -81,6 +82,56 @@ def cwd_matches(cwd, targets):
 
 def clip_text(text, length):
     return " ".join(text.strip().split())[:length]
+
+
+def clip_model_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return clip_text(str(value), 120)
+    return clip_text(json.dumps(value, ensure_ascii=False), 120)
+
+
+def collect_model_fields(value, prefix="", depth=0):
+    if depth > 4:
+        return {}
+    fields = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            path = key_text if not prefix else prefix + "." + key_text
+            if "model" in key_text.lower():
+                fields[path] = clip_model_value(child)
+            fields.update(collect_model_fields(child, path, depth + 1))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value[:20]):
+            path = "%s[%s]" % (prefix, idx) if prefix else "[%s]" % idx
+            fields.update(collect_model_fields(child, path, depth + 1))
+    return fields
+
+
+def assistant_model_from_entry(entry):
+    message = entry.get("message")
+    if not isinstance(message, dict):
+        return ""
+    model = message.get("model")
+    return str(model) if isinstance(model, str) and model else ""
+
+
+def model_invocation_record(entry, block):
+    input_data = block.get("input")
+    if not isinstance(input_data, dict):
+        input_data = {}
+    model_fields = collect_model_fields(input_data)
+    return {
+        "timestamp": str(entry.get("timestamp", "")),
+        "tool": str(block.get("name", "unknown")),
+        "assistant_model": assistant_model_from_entry(entry),
+        "team_name": str(input_data.get("team_name", "")),
+        "agent_type": str(input_data.get("agent_type", "")),
+        "subagent_type": str(input_data.get("subagent_type", "")),
+        "name": str(input_data.get("name", "")),
+        "description": clip_text(str(input_data.get("description", "")), 120),
+        "model_fields": model_fields,
+    }
 
 
 def md_cell(text):
@@ -550,10 +601,15 @@ def transcript_active_intervals(entries):
 def summarize_session(meta, correction_re):
     entries = read_jsonl_lenient(meta["file"])
     tools = {}
+    assistant_models = {}
     files = {}
     errors = 0
     interrupted = False
     agent_calls = 0
+    model_invocation_tool_count = 0
+    model_invocation_tools_with_model_field_count = 0
+    model_invocation_calls = []
+    model_field_counts = {}
     logical_roles = {}
     edit_write_count = 0
     verification_count = 0
@@ -569,12 +625,25 @@ def summarize_session(meta, correction_re):
     for entry in entries:
         content = entry.get("message", {}).get("content")
         if entry.get("type") == "assistant" and isinstance(content, list):
+            assistant_model = assistant_model_from_entry(entry)
+            if assistant_model:
+                assistant_models[assistant_model] = assistant_models.get(assistant_model, 0) + 1
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
                 name = str(block.get("name", "unknown"))
                 tool_id = block.get("id")
                 tools[name] = tools.get(name, 0) + 1
+                if name in MODEL_INVOCATION_TOOLS:
+                    record = model_invocation_record(entry, block)
+                    model_invocation_tool_count += 1
+                    if record["model_fields"]:
+                        model_invocation_tools_with_model_field_count += 1
+                        for field_name in record["model_fields"]:
+                            key = "%s.%s" % (name, field_name)
+                            model_field_counts[key] = model_field_counts.get(key, 0) + 1
+                    if len(model_invocation_calls) < 20:
+                        model_invocation_calls.append(record)
                 if name in ("Edit", "MultiEdit", "Write", "NotebookEdit"):
                     edit_write_count += 1
                 input_data = block.get("input")
@@ -632,6 +701,8 @@ def summarize_session(meta, correction_re):
                 interrupted = True
 
     tools = sort_counts(tools)
+    assistant_models = sort_counts(assistant_models)
+    model_field_counts = sort_counts(model_field_counts)
     files = sort_counts(files)
     raw_subagent_count = len(discover_subagent_files(meta["file"], meta["session_id"]))
     logical_role_count = len(logical_roles)
@@ -737,6 +808,11 @@ def summarize_session(meta, correction_re):
         "large_idle_gap_count": durations["large_idle_gap_count"],
         "top_files": dict(list(files.items())[:8]),
         "tools": tools,
+        "assistant_models": assistant_models,
+        "model_invocation_tool_count": model_invocation_tool_count,
+        "model_invocation_tools_with_model_field_count": model_invocation_tools_with_model_field_count,
+        "model_invocation_model_fields": dict(list(model_field_counts.items())[:20]),
+        "model_invocation_calls": model_invocation_calls,
         "tool_use_count": tool_count,
     }
 
@@ -822,6 +898,7 @@ def summarize_transcript_entries(entries, seen_tool_uses=None, seen_tool_results
     if seen_tool_results is None:
         seen_tool_results = set()
     tools = {}
+    assistant_models = {}
     errors = 0
     interrupted = False
     verification_count = 0
@@ -834,6 +911,9 @@ def summarize_transcript_entries(entries, seen_tool_uses=None, seen_tool_results
     for entry in entries:
         content = entry.get("message", {}).get("content")
         if entry.get("type") == "assistant" and isinstance(content, list):
+            assistant_model = assistant_model_from_entry(entry)
+            if assistant_model:
+                assistant_models[assistant_model] = assistant_models.get(assistant_model, 0) + 1
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
@@ -888,6 +968,7 @@ def summarize_transcript_entries(entries, seen_tool_uses=None, seen_tool_results
     durations = duration_metrics(entries)
     return {
         "tools": sort_counts(tools),
+        "assistant_models": sort_counts(assistant_models),
         "error_count": errors,
         "interrupted": interrupted,
         "verification_count": verification_count,
@@ -914,6 +995,7 @@ def summarize_subagents(meta):
         "active_minutes_cumulative": 0,
         "active_minutes_union": 0,
         "wall_range_minutes": 0,
+        "assistant_models": {},
     }
     by_role = {}
     seen_tool_uses = set()
@@ -942,6 +1024,7 @@ def summarize_subagents(meta):
             "active_minutes_union": 0,
             "wall_range_minutes": 0,
             "top_tools": {},
+            "assistant_models": {},
             "_active_intervals": [],
             "_wall_intervals": [],
         })
@@ -964,6 +1047,9 @@ def summarize_subagents(meta):
         all_active_intervals.extend(active_intervals)
         for name, count in stats["tools"].items():
             role_stats["top_tools"][name] = role_stats["top_tools"].get(name, 0) + count
+        for model, count in stats["assistant_models"].items():
+            role_stats["assistant_models"][model] = role_stats["assistant_models"].get(model, 0) + count
+            totals["assistant_models"][model] = totals["assistant_models"].get(model, 0) + count
 
         totals["transcript_count"] += 1
         totals["error_count"] += stats["error_count"]
@@ -978,6 +1064,7 @@ def summarize_subagents(meta):
 
     for role in list(by_role.keys()):
         by_role[role]["top_tools"] = dict(list(sort_counts(by_role[role]["top_tools"]).items())[:8])
+        by_role[role]["assistant_models"] = dict(list(sort_counts(by_role[role]["assistant_models"]).items())[:8])
         active_intervals = by_role[role].pop("_active_intervals", [])
         wall_intervals = by_role[role].pop("_wall_intervals", [])
         by_role[role]["active_minutes_union"] = interval_union_minutes(active_intervals)
@@ -986,6 +1073,7 @@ def summarize_subagents(meta):
             ends = [interval[1] for interval in wall_intervals if interval[1] is not None]
             by_role[role]["wall_range_minutes"] = int(round((max(ends) - min(starts)) / 60.0)) if starts and ends else 0
     totals["active_minutes_union"] = interval_union_minutes(all_active_intervals)
+    totals["assistant_models"] = dict(list(sort_counts(totals["assistant_models"]).items())[:12])
     if all_wall_intervals:
         starts = [interval[0] for interval in all_wall_intervals if interval[0] is not None]
         ends = [interval[1] for interval in all_wall_intervals if interval[1] is not None]
@@ -1282,12 +1370,19 @@ def main(argv):
         "large_idle_gap_count": 0,
         "large_packet_count": 0,
         "very_large_packet_count": 0,
+        "model_invocation_tool_count": 0,
+        "model_invocation_tools_with_model_field_count": 0,
     }
     aggregate_kinds = {}
     aggregate_files = {}
     aggregate_slash_commands = {}
     aggregate_skill_base_dirs = {}
     aggregate_subagent_roles = {}
+    aggregate_assistant_models = {}
+    aggregate_subagent_assistant_models = {}
+    aggregate_model_invocation_tools = {}
+    aggregate_model_invocation_assistant_models = {}
+    aggregate_model_invocation_model_fields = {}
 
     for item in selected_items:
         meta = item["meta"]
@@ -1355,6 +1450,12 @@ def main(argv):
             "logical_subagent_role_count": summary["logical_subagent_role_count"],
             "logical_subagent_roles": summary["logical_subagent_roles"],
             "subagent_role_stats": summary["subagents"]["by_role"],
+            "main_assistant_models": summary["assistant_models"],
+            "subagent_assistant_models": subagent_totals["assistant_models"],
+            "model_invocation_tool_count": summary["model_invocation_tool_count"],
+            "model_invocation_tools_with_model_field_count": summary["model_invocation_tools_with_model_field_count"],
+            "model_invocation_model_fields": summary["model_invocation_model_fields"],
+            "model_invocation_calls": summary["model_invocation_calls"],
             "subagent_send_message_count": subagent_totals["send_message_count"],
             "subagent_active_minutes_cumulative": subagent_totals["active_minutes_cumulative"],
             "subagent_active_minutes_union": subagent_totals["active_minutes_union"],
@@ -1413,7 +1514,22 @@ def main(argv):
         aggregate_totals["large_idle_gap_count"] += summary["large_idle_gap_count"]
         aggregate_totals["large_packet_count"] += 1 if packet_large else 0
         aggregate_totals["very_large_packet_count"] += 1 if packet_very_large else 0
+        aggregate_totals["model_invocation_tool_count"] += summary["model_invocation_tool_count"]
+        aggregate_totals["model_invocation_tools_with_model_field_count"] += summary["model_invocation_tools_with_model_field_count"]
         aggregate_kinds[summary["session_kind"]] = aggregate_kinds.get(summary["session_kind"], 0) + 1
+        for model, count in summary["assistant_models"].items():
+            aggregate_assistant_models[model] = aggregate_assistant_models.get(model, 0) + count
+        for model, count in subagent_totals["assistant_models"].items():
+            aggregate_subagent_assistant_models[model] = aggregate_subagent_assistant_models.get(model, 0) + count
+        for call in summary["model_invocation_calls"]:
+            tool = call.get("tool", "")
+            if tool:
+                aggregate_model_invocation_tools[tool] = aggregate_model_invocation_tools.get(tool, 0) + 1
+            model = call.get("assistant_model", "")
+            if model:
+                aggregate_model_invocation_assistant_models[model] = aggregate_model_invocation_assistant_models.get(model, 0) + 1
+        for field_name, count in summary["model_invocation_model_fields"].items():
+            aggregate_model_invocation_model_fields[field_name] = aggregate_model_invocation_model_fields.get(field_name, 0) + count
         for command in summary["slash_commands"]:
             label = slash_command_label(command)
             if label:
@@ -1452,6 +1568,8 @@ def main(argv):
             "human_users": meta["human_users"],
             "raw_subagent_transcript_count": summary["raw_subagent_transcript_count"],
             "logical_subagent_role_count": summary["logical_subagent_role_count"],
+            "model_invocation_tool_count": summary["model_invocation_tool_count"],
+            "model_invocation_tools_with_model_field_count": summary["model_invocation_tools_with_model_field_count"],
             "packet_size_bytes": packet_size_bytes,
             "packet_line_count": packet_line_count,
             "large_packet": packet_large,
@@ -1471,6 +1589,11 @@ def main(argv):
         aggregate_subagent_roles.items(),
         key=lambda item: (-item[1]["transcript_count"], item[0]),
     ))
+    aggregate_assistant_models = sort_counts(aggregate_assistant_models)
+    aggregate_subagent_assistant_models = sort_counts(aggregate_subagent_assistant_models)
+    aggregate_model_invocation_tools = sort_counts(aggregate_model_invocation_tools)
+    aggregate_model_invocation_assistant_models = sort_counts(aggregate_model_invocation_assistant_models)
+    aggregate_model_invocation_model_fields = sort_counts(aggregate_model_invocation_model_fields)
     packet_recommendations = recommended_packets(aggregate_sessions)
 
     index = []
@@ -1539,11 +1662,30 @@ def main(argv):
     index.append("- Raw subagent transcripts: %s" % aggregate_totals["raw_subagent_transcript_count"])
     index.append("- Logical subagent roles: %s" % aggregate_totals["logical_subagent_role_count"])
     index.append("- Subagent SendMessage count: %s" % aggregate_totals["subagent_send_message_count"])
+    index.append("- Model-invocation tool calls: %s (with explicit model fields %s)" % (
+        aggregate_totals["model_invocation_tool_count"],
+        aggregate_totals["model_invocation_tools_with_model_field_count"],
+    ))
     index.append("- Large packets: %s (very large %s)" % (
         aggregate_totals["large_packet_count"],
         aggregate_totals["very_large_packet_count"],
     ))
     index.append("- Top files: %s\n" % format_counts(dict(list(aggregate_files.items())[:8])))
+    if aggregate_assistant_models or aggregate_subagent_assistant_models or aggregate_model_invocation_tools:
+        index.append("## Model Invocation Signals\n")
+        index.append("These signals come from assistant message `model` fields and model-invocation tool inputs. A zero explicit-field count means no `model*` key was present in the tool input for this run.")
+        index.append("")
+        if aggregate_model_invocation_tools:
+            index.append("- Model-invocation tools: %s" % format_counts(dict(list(aggregate_model_invocation_tools.items())[:8])))
+        if aggregate_model_invocation_assistant_models:
+            index.append("- Assistant models that issued model-invocation tools: %s" % format_counts(dict(list(aggregate_model_invocation_assistant_models.items())[:8])))
+        if aggregate_model_invocation_model_fields:
+            index.append("- Explicit model input fields: %s" % format_counts(dict(list(aggregate_model_invocation_model_fields.items())[:8])))
+        if aggregate_assistant_models:
+            index.append("- Main assistant message models: %s" % format_counts(dict(list(aggregate_assistant_models.items())[:8])))
+        if aggregate_subagent_assistant_models:
+            index.append("- Subagent assistant message models: %s" % format_counts(dict(list(aggregate_subagent_assistant_models.items())[:8])))
+        index.append("")
     if aggregate_slash_commands or aggregate_skill_base_dirs or aggregate_skill_files or aggregate_doc_files:
         index.append("## Focus Hints\n")
         index.append("Use these hints when the user asks about a specific command, skill, file area, feature, or other natural-language focus. They are discovery aids, not automatic conclusions.")
@@ -1651,6 +1793,7 @@ def main(argv):
     index.append("- Start from `aggregate.json` and this index before opening packets.")
     index.append("- Treat `raw_subagent_transcript_count` as storage/transcript count and `logical_subagent_role_count` as the distinct delegated role labels observed in parent tool calls.")
     index.append("- Treat subagent tool counts as de-duplicated by tool_use ID. Prefer subagent active union minutes for elapsed role activity; cumulative minutes can include resumed transcript context.")
+    index.append("- For model selection analysis, use `model_invocation_calls`, `main_assistant_models`, and `subagent_assistant_models`. Do not infer explicit model selection unless `model_invocation_tools_with_model_field_count` or `model_invocation_model_fields` shows a `model*` input key.")
     index.append("- Avoid ad hoc `python -c` or Python heredocs for inspecting generated JSON; read `aggregate.json` directly or add a named helper script under `bin/` for repeated transformations.")
     index.append("- For packets listed under Large Packets, do not full-read the file. Use bounded ranges around Metadata, Main Signals, Agent Activity, Notable Tool Results, or grep/find first.")
     index.append("- In `normal` mode, do not open every `Recommended Packets` entry in parallel. Skip sessions whose signals are already covered, and target roughly 50-80K tokens of total opened packet content.")
@@ -1700,6 +1843,11 @@ def main(argv):
         "top_skill_base_directories": dict(list(aggregate_skill_base_dirs.items())[:20]),
         "top_skill_files": dict(list(aggregate_skill_files.items())[:20]),
         "top_doc_files": dict(list(aggregate_doc_files.items())[:20]),
+        "top_assistant_models": dict(list(aggregate_assistant_models.items())[:20]),
+        "top_subagent_assistant_models": dict(list(aggregate_subagent_assistant_models.items())[:20]),
+        "top_model_invocation_tools": dict(list(aggregate_model_invocation_tools.items())[:20]),
+        "top_model_invocation_assistant_models": dict(list(aggregate_model_invocation_assistant_models.items())[:20]),
+        "top_model_invocation_model_fields": dict(list(aggregate_model_invocation_model_fields.items())[:20]),
         "subagent_role_stats": aggregate_subagent_roles,
         "recommended_packets": packet_recommendations,
         "sessions": aggregate_sessions,

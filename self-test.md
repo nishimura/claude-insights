@@ -78,14 +78,17 @@ based on reading `bin/collect-project-packets.py` and
 - `aggregate.json`: top-level `totals`, `session_kinds`,
   `recommended_packets`, `subagent_role_stats`, and `sessions`; per-session
   records should include counts, flags, packet metadata, top files/tools, and
-  subagent summaries. It should also include `correction_keywords` metadata.
-- `index.md`: Scope, Aggregate Signals, optional Subagent Role Stats, optional
-  Large Packets, Recommended Packets, Packetized Sessions, and Report Guidance.
+  subagent summaries, plus model-invocation summaries such as
+  `model_invocation_calls`. It should also include `correction_keywords`
+  metadata.
+- `index.md`: Scope, Aggregate Signals, optional Model Invocation Signals,
+  optional Subagent Role Stats, optional Large Packets, Recommended Packets,
+  Packetized Sessions, and Report Guidance.
 - `next-action.json`: output directory, index path, aggregate path, packet
   count, session summaries, and suggested next step.
 - `packets/<session>.md`: Metadata, Main Intent, Main Timeline, Main Signals,
-  optional Notable Main Tool Results, Agent Activity, and Combined Delegation
-  Signals.
+  optional Notable Main Tool Results, Agent Activity, model-invocation call
+  details, and Combined Delegation Signals.
 - `correction-keywords.txt`: normalized run-local keyword list, if correction
   keywords were used.
 - `findings.md`: assistant-written discovery ledger for `deep` runs, if used;

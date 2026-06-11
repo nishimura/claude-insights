@@ -158,6 +158,14 @@ subagent analysis では、`raw_subagent_transcript_count` と `logical_subagent
 
 Subagent tool counts は tool_use ID で de-duplicate される。elapsed role activity には `active_minutes_union` を優先する。`active_minutes_cumulative` は resumed agents の repeated context を含みうる。
 
+model-selection analysis では、`model_invocation_calls`、
+`main_assistant_models`、`subagent_assistant_models`、top-level の
+`top_model_invocation_*` fields を確認する。assistant message の `model` は
+`TeamCreate`、`Agent`、`Task` tool call を発行した model を示すが、tool input
+内でその model を明示選択した証拠ではない。明示選択が観測されたと扱うのは、
+`model_invocation_tools_with_model_field_count` または
+`model_invocation_model_fields` に `model*` input key が出ている場合だけ。
+
 ## Report Shape
 
 ユーザーが別の指定をしない限り、この section set から始める:

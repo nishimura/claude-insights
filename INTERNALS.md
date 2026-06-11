@@ -103,12 +103,21 @@ and later review can see exactly what was used.
 Detailed per-session packet. It separates main-session behavior from subagent
 behavior and includes clipped timelines, tool counts, errors, referenced files,
 shell commands, notable error/verification tool results, verification outcome
-counts, active duration, and subagent outcome hints.
+counts, active duration, model-invocation tool signals, and subagent outcome
+hints.
 
 When parallel Agent/Task calls branch the main conversation tree, the selected
 best-chain timeline can omit sibling Agent/Task calls. Packets therefore also
 show the full-session Agent/Task call count and any calls outside the selected
 main chain when those counts differ.
+
+Model-invocation signals are collected for `TeamCreate`, `Agent`, and `Task`.
+For each call, the collector records the assistant message `model`, delegation
+labels such as `team_name`, `agent_type`, `subagent_type`, and any tool input
+field whose key contains `model`. The assistant message model shows which model
+issued the tool call; it is not proof that the tool explicitly selected that
+model. Treat explicit selection as present only when `model_invocation_model_fields`
+or `model_invocation_tools_with_model_field_count` is non-zero.
 
 ### `next-action.json`
 
