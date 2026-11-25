@@ -199,7 +199,11 @@ def is_conversation_message(msg):
 
 
 def is_synthetic_user_text(text):
-    return text.strip().startswith(SYNTHETIC_USER_PREFIXES)
+    trimmed = text.strip()
+    return (
+        trimmed.startswith(SYNTHETIC_USER_PREFIXES)
+        or re.search(r"<command-name>/(clear|exit)</command-name>", trimmed) is not None
+    )
 
 
 def synthetic_user_label(msg, text):
@@ -904,8 +908,11 @@ def agent_outcome(stats, meta=None):
     if stats["errors"] >= 2:
         return "error-heavy"
     # Current subagents end with the SubagentHandback tool and their .meta.json
-    # says finished: true; older ones reported back with SendMessage.
-    if stats["sendMessageCount"] > 0 or stats["tools"].get("SubagentHandback"):
+    # says finished: true; Workflow agents return through StructuredOutput;
+    # older ones reported back with SendMessage.
+    if stats["sendMessageCount"] > 0:
+        return "completed"
+    if stats["tools"].get("SubagentHandback") or stats["tools"].get("StructuredOutput"):
         return "completed"
     if isinstance(meta, dict) and meta.get("finished") is True:
         return "completed"

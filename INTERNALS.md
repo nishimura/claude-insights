@@ -367,8 +367,9 @@ reads, large-packet handling, report verification, and accidental ad hoc
   `[Request interrupted by user`. A subagent hand-back or peer message that
   quotes that text is not an interruption.
 - A subagent's Outcome is `completed` when it called `SubagentHandback` (current
-  subagents end this way), reported with `SendMessage`, or its `.meta.json`
-  says `finished: true`.
+  subagents end this way) or `StructuredOutput` (Workflow agents return their
+  result this way), reported with `SendMessage`, or its `.meta.json` says
+  `finished: true`.
 - Shell command lists in packets are capped by `--max-commands`; the heading
   says `(showing first N of M)` when commands were left out.
 - Subagent counts can be noisy when a role is recorded across multiple JSONL
