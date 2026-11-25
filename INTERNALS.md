@@ -83,6 +83,15 @@ Report/document completeness checks such as `grep '^## ' report.md`, `wc -l`,
 or `tail report.md` are counted separately as `report_verification_*` fields.
 They are not included in build/test `verification_count`.
 
+A Bash command counts as verification when one of its simple commands (split at
+newlines, `;`, `&&`, `||`, and `|`, outside quotes) runs a test runner, linter,
+type checker or build (`phpunit`, `phpstan`, `pytest`, `npm test`, `make check`,
+`php artisan test`, `./run-tests.sh`, ...). Simple commands that start with a
+command that only reads or moves files (`grep`, `sed`, `cat`, `git`, `ls`,
+`find`, ...) never count, so `grep -rn phpunit .` or `sed -n 1,40p
+tests/FooTest.php` are not verification. Heredoc bodies and redirection targets
+are ignored, and `bash -c '...'` is looked into.
+
 Packet sizing metadata is included as `packet_size_bytes`, `packet_line_count`,
 `large_packet`, `very_large_packet`, and `suggested_read_strategy`, so report
 authors can avoid full reads of large packet files.
@@ -106,11 +115,18 @@ shell commands, notable error/verification tool results, verification outcome
 counts, active duration, model-invocation tool signals, and subagent outcome
 hints.
 
-When parallel delegation calls branch the main conversation tree, the selected
-best-chain timeline can omit sibling calls. Packets therefore also show the
-full-session delegation call count and any calls outside the selected main chain
-when those counts differ. Delegation calls are `Agent`, `Workflow`, and the old
-`Task` name.
+The timeline follows one branch of the `parentUuid` tree: the branch whose last
+message was written last, as Claude Code picks when it resumes. Older attempts
+that the user rewound or edited are left out. The walk crosses compactions
+through `logicalParentUuid` (a compact boundary has `parentUuid: null`), so a
+packet covers the whole session, not only the part after the last compaction.
+Parallel tool calls in one response leave dead-end sibling branches; they are
+put back into the timeline (same `message.id`, and the results of those tool
+calls).
+
+Packets also show the full-session delegation call count and any calls outside
+the selected branch when those counts differ; such calls come from rewound
+attempts. Delegation calls are `Agent`, `Workflow`, and the old `Task` name.
 
 Timeline lines are labeled by who produced them. Only `[User]` lines are text a
 person typed (or a subagent's task prompt). `[Task notification]` is a
@@ -344,7 +360,17 @@ reads, large-packet handling, report verification, and accidental ad hoc
 - For larger limits, read `aggregate.json` and `index.md` first, then open
   substantive packets before sampling low-signal or no-op sessions.
 - The packets are intermediate evidence, not the final report.
-- Session duration is based on transcript timestamps and may include idle time.
+- Session duration is based on the timestamps of user and assistant entries and
+  may include idle time. System entries such as `away_summary`, written minutes
+  after a turn, are not counted.
+- An interruption is a person's user entry whose text starts with
+  `[Request interrupted by user`. A subagent hand-back or peer message that
+  quotes that text is not an interruption.
+- A subagent's Outcome is `completed` when it called `SubagentHandback` (current
+  subagents end this way), reported with `SendMessage`, or its `.meta.json`
+  says `finished: true`.
+- Shell command lists in packets are capped by `--max-commands`; the heading
+  says `(showing first N of M)` when commands were left out.
 - Subagent counts can be noisy when a role is recorded across multiple JSONL
   files. Treat named role flow and packet evidence as more reliable than raw
   discovered-subagent counts.
