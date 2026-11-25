@@ -152,6 +152,8 @@ selection refinement には `index.md` flags を使う:
 - `docs`
 - `implementation`
 
+packet の timeline で、人が入力したメッセージ（または subagent への依頼文）は `[User]` 行だけ。`[Task notification]` は subagent の完了通知、`[Agent message]` は他エージェントからのメッセージ、`[System]` 行は Claude Code が差し込んだもの。これらをユーザーのフィードバックとして読まない。
+
 subagent analysis では、`raw_subagent_transcript_count` と `logical_subagent_role_count` を比較する。raw transcripts は file 間で split されることがあり、logical roles は parent delegation labels から来る。
 
 `aggregate.json` の `subagent_role_stats`、`subagent_*`、`combined_*` fields も確認する。legacy `verification_count` と `error_count` fields は main-session counts。subagent verification と errors は別に report される。report/document completeness checks は `report_verification_*` fields に別計上され、build/test の `verification_count` には含まれない。
@@ -161,7 +163,7 @@ Subagent tool counts は tool_use ID で de-duplicate される。elapsed role a
 model-selection analysis では、`model_invocation_calls`、
 `main_assistant_models`、`subagent_assistant_models`、top-level の
 `top_model_invocation_*` fields を確認する。assistant message の `model` は
-`TeamCreate`、`Agent`、`Task` tool call を発行した model を示すが、tool input
+`Agent`、`Workflow` tool call（古いセッションでは `TeamCreate`、`Task`）を発行した model を示すが、tool input
 内でその model を明示選択した証拠ではない。明示選択が観測されたと扱うのは、
 `model_invocation_tools_with_model_field_count` または
 `model_invocation_model_fields` に `model*` input key が出ている場合だけ。

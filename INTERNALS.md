@@ -106,12 +106,24 @@ shell commands, notable error/verification tool results, verification outcome
 counts, active duration, model-invocation tool signals, and subagent outcome
 hints.
 
-When parallel Agent/Task calls branch the main conversation tree, the selected
-best-chain timeline can omit sibling Agent/Task calls. Packets therefore also
-show the full-session Agent/Task call count and any calls outside the selected
-main chain when those counts differ.
+When parallel delegation calls branch the main conversation tree, the selected
+best-chain timeline can omit sibling calls. Packets therefore also show the
+full-session delegation call count and any calls outside the selected main chain
+when those counts differ. Delegation calls are `Agent`, `Workflow`, and the old
+`Task` name.
 
-Model-invocation signals are collected for `TeamCreate`, `Agent`, and `Task`.
+Timeline lines are labeled by who produced them. Only `[User]` lines are text a
+person typed (or a subagent's task prompt). `[Task notification]` is a
+subagent's completion notice, `[Agent message]` is a message from another agent
+(such as a subagent hand-back), and `[System]` / `[System: <kind>]` lines are
+inserted by Claude Code (skill bodies, system reminders, local command output).
+
+Each subagent section shows `Agent type`, `Description`, and `Workflow phase`
+from the `agent-<id>.meta.json` file beside the transcript when it exists.
+
+Model-invocation signals are collected for `Agent` and `Workflow`, plus
+`TeamCreate` (removed in Claude Code 2.1.178) and `Task` (the old name of the
+Agent tool) for older sessions.
 For each call, the collector records the assistant message `model`, delegation
 labels such as `team_name`, `agent_type`, `subagent_type`, and any tool input
 field whose key contains `model`. The assistant message model shows which model
@@ -336,5 +348,17 @@ reads, large-packet handling, report verification, and accidental ad hoc
 - Subagent counts can be noisy when a role is recorded across multiple JSONL
   files. Treat named role flow and packet evidence as more reliable than raw
   discovered-subagent counts.
+- Human user messages are told apart from inserted ones by `origin.kind` in
+  recent transcripts. Older transcripts have no `origin`; there `isMeta` and
+  known text prefixes (`<task-notification>`, `Another Claude session sent a
+  message:`, `<system-reminder>`, local command output, ...) decide.
+- Only `agent-*.jsonl` files under `subagents/` are agent transcripts. Other
+  JSONL files there, such as a workflow's `journal.jsonl`, are skipped. The
+  role of a subagent comes from `agentType` in its `.meta.json` when present,
+  and is otherwise inferred from the parent's delegation call and task text.
+- Files that Bash commands changed (`sed -i`, heredoc, ...) are read from
+  `toolUseResult.bashEditDiff`, and each such command counts as one edit in
+  `edit_write_count`. `bash_edit_count` is that Bash share. Claude Code records
+  only files inside the session's working directories there.
 - The scripts read local Claude Code history. Review generated packets before
   sharing them outside your machine.

@@ -223,6 +223,11 @@ Use `index.md` flags to refine the selection:
 - `docs`
 - `implementation`
 
+In packet timelines, only `[User]` lines are messages a person typed (or a
+subagent's task prompt). `[Task notification]` is a subagent's completion
+notice, `[Agent message]` is a message from another agent, and `[System]`
+lines are inserted by Claude Code. Do not read them as user feedback.
+
 For subagent analysis, compare `raw_subagent_transcript_count` with
 `logical_subagent_role_count`; raw transcripts can be split across files, while
 logical roles come from parent delegation labels.
@@ -240,7 +245,8 @@ can include repeated context from resumed agents.
 For model-selection analysis, inspect `model_invocation_calls`,
 `main_assistant_models`, `subagent_assistant_models`, and top-level
 `top_model_invocation_*` fields. The assistant message `model` identifies which
-model issued a `TeamCreate`, `Agent`, or `Task` tool call; it is not proof of an
+model issued an `Agent` or `Workflow` tool call (or, in older sessions, a
+`TeamCreate` or `Task` call); it is not proof of an
 explicit model selection inside the tool input. Only treat explicit selection as
 observed when `model_invocation_tools_with_model_field_count` or
 `model_invocation_model_fields` shows a `model*` input key.

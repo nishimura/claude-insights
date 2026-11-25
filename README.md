@@ -59,7 +59,8 @@ start from a dedicated session when you want a cleaner analysis context.
   - tool counts
   - referenced files and shell commands
   - delegation and error signals
-  - model-invocation signals for `TeamCreate`, `Agent`, and `Task`
+  - model-invocation signals for `Agent` and `Workflow` (plus `TeamCreate`
+    and `Task`, which appear only in older sessions)
 - Produces an `index.md` so the assistant can read only the packets it needs.
 - Produces an `aggregate.json` with first intents, session kinds, signal
   classes, edit/write counts, verification counts, errors, interruptions,
