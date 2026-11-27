@@ -7,17 +7,20 @@ import glob
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 from datetime import datetime
+
+from session_transcript import (
+    IDLE_GAP_SECONDS, duration_metrics, select_conversation, timestamp_to_epoch,
+)
+from verification_commands import is_verification_command
 try:
     from html import unescape as html_unescape
 except ImportError:
     html_unescape = None
 
 INTENT_CLIP = 140
-IDLE_GAP_SECONDS = 30 * 60
 # Empirical thresholds calibrated to the Read tool's 25000-token cap. Packets
 # with significant non-ASCII (multibyte) text use roughly 2 bytes per token; a
 # packet at or above ~40KB / ~700 lines can truncate on a full Read and must be
@@ -63,28 +66,6 @@ SYNTHETIC_USER_PREFIXES = (
 )
 # A person's interruption is recorded as a user entry starting with this text.
 INTERRUPT_MARKER = "[Request interrupted by user"
-# Commands that only read or move files. A shell segment that starts with one
-# of them is not a verification run, even if it mentions "phpunit" or "tests".
-NON_VERIFY_COMMANDS = frozenset((
-    "grep", "egrep", "fgrep", "rg", "ag", "sed", "awk", "cat", "bat", "head",
-    "tail", "less", "more", "wc", "ls", "find", "fd", "tree", "echo", "printf",
-    "jq", "diff", "cut", "sort", "uniq", "nl", "file", "stat", "git", "cd",
-    "pwd", "true", "false", "which", "type", "command", "mkdir",
-    "cp", "mv", "rm", "touch", "chmod", "ln", "readlink", "realpath",
-    "basename", "dirname", "xxd", "od",
-))
-# Commands that run the command after them.
-WRAPPER_COMMANDS = frozenset(("sudo", "env", "time", "nice", "nohup", "timeout", "xargs", "exec"))
-SHELL_COMMANDS = frozenset(("bash", "sh", "zsh"))
-# Shell keywords: the command after them is what runs. A segment that is only
-# a loop header or a closing keyword runs nothing.
-SHELL_PREFIX_KEYWORDS = frozenset(("do", "then", "else", "elif", "if", "while", "until", "!", "{"))
-SHELL_NOOP_KEYWORDS = frozenset(("for", "select", "case", "in", "esac", "done", "fi", "}", "function"))
-SEGMENT_SEPARATORS = frozenset((";", "&&", "||", "|", "&", "|&", "(", ")", ";;"))
-ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-HEREDOC_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-REDIRECT_RE = re.compile(r"^[0-9]*(>|>>|<|>&|<&|&>|&>>|>\|)$")
-TEST_COMMAND_RE = re.compile(r"(^|[-_.])tests?([-_.]|$)", re.IGNORECASE)
 CONVERSATION_TYPES = ("user", "assistant")
 
 
@@ -393,149 +374,10 @@ def extract_session_markers(entries):
     }
 
 
-# Tools that verify. Plain "test"/"tests" is handled in segment_is_verification.
-VERIFY_TOOL_RE = re.compile(
-    r"\b(phpunit|phpstan|pytest|cargo\s+test|npm\s+(run\s+)?test|npm\s+run\s+(check|lint|build)|pnpm\s+(test|lint|build|check)|yarn\s+(test|lint|build|check)|make\s+(test|check|lint)|tsc|eslint|ruff|mypy|go\s+test|bundle\s+exec\s+rspec)\b",
-    re.IGNORECASE,
-)
 REPORT_VERIFY_RE = re.compile(
     r"\b(report\.md)\b.*\b(grep|rg|head|tail|wc|sed)\b|\b(grep|rg|head|tail|wc|sed)\b.*\b(report\.md)\b",
     re.IGNORECASE,
 )
-
-
-def scan_quotes(text, quote):
-    """Return the quote state (None, "'" or '"') at the end of text."""
-    idx = 0
-    while idx < len(text):
-        char = text[idx]
-        if quote == "'":
-            if char == "'":
-                quote = None
-        elif char == "\\":
-            idx += 1
-        elif quote == '"':
-            if char == '"':
-                quote = None
-        elif char in "'\"":
-            quote = char
-        idx += 1
-    return quote
-
-
-def logical_lines(command):
-    """Split a shell command at newlines outside quotes; drop heredoc bodies."""
-    lines = []
-    buffer = None
-    quote = None
-    heredoc_end = None
-    for raw in command.split("\n"):
-        if heredoc_end is not None:
-            if raw.strip() == heredoc_end:
-                heredoc_end = None
-            continue
-        buffer = raw if buffer is None else buffer + "\n" + raw
-        quote = scan_quotes(raw, quote)
-        if quote is not None or raw.endswith("\\"):
-            continue
-        lines.append(buffer)
-        match = HEREDOC_RE.search(buffer)
-        if match:
-            heredoc_end = match.group(2)
-        buffer = None
-    if buffer is not None:
-        lines.append(buffer)
-    return lines
-
-
-def shell_line_tokens(line):
-    """Split one shell line into tokens; separators such as ; && | are tokens."""
-    try:
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        return list(lexer)
-    except ValueError:
-        # Unbalanced quotes: split roughly.
-        return re.findall(r"&&|\|\||[;|&()]|[^\s;|&()]+", line)
-
-
-def command_segments(command):
-    """Yield the token list of each simple command."""
-    for line in logical_lines(command):
-        segment = []
-        for token in shell_line_tokens(line):
-            if token in SEGMENT_SEPARATORS:
-                if segment:
-                    yield segment
-                segment = []
-            else:
-                segment.append(token)
-        if segment:
-            yield segment
-
-
-def without_redirections(tokens):
-    words = []
-    skip_next = False
-    for token in tokens:
-        if skip_next:
-            skip_next = False
-            continue
-        if REDIRECT_RE.match(token):
-            skip_next = True
-            continue
-        words.append(token)
-    return words
-
-
-def segment_is_verification(tokens, depth=0):
-    tokens = without_redirections(tokens)
-    idx = 0
-    while idx < len(tokens):
-        token = tokens[idx]
-        if ASSIGNMENT_RE.match(token) or token.startswith("-") or token in SHELL_PREFIX_KEYWORDS:
-            idx += 1
-            continue
-        if os.path.basename(token) in WRAPPER_COMMANDS:
-            idx += 1
-            # timeout takes a duration before the command.
-            if token == "timeout" and idx < len(tokens) and re.match(r"^[0-9.]+[smhd]?$", tokens[idx]):
-                idx += 1
-            continue
-        break
-    if idx >= len(tokens):
-        return False
-    if tokens[idx] in ("test", "[", "[["):
-        return False  # the shell's test builtin, not a test runner
-    head = os.path.basename(tokens[idx])
-    if head in NON_VERIFY_COMMANDS or head in SHELL_NOOP_KEYWORDS:
-        return False
-    words = tokens[idx:]
-    if head in SHELL_COMMANDS and "-c" in words and depth < 3:
-        pos = words.index("-c")
-        if pos + 1 < len(words):
-            return command_is_verification(words[pos + 1], depth + 1)
-        return False
-    if VERIFY_TOOL_RE.search(" ".join(words)):
-        return True
-    # "test"/"tests" alone is too common (directory names); count it only as
-    # the command name (test.sh, run-tests) or its subcommand (artisan test).
-    if TEST_COMMAND_RE.search(head):
-        return True
-    return any(word.lower() in ("test", "tests") for word in words[1:3])
-
-
-def command_is_verification(command, depth=0):
-    return any(segment_is_verification(tokens, depth) for tokens in command_segments(command))
-
-
-def is_verification_command(command):
-    """True when some simple command in it runs tests, a linter or a build.
-
-    Looking at each simple command's head keeps `grep phpunit ...` or
-    `sed -n 1,40p tests/FooTest.php` from counting as verification.
-    """
-    return command_is_verification(command)
 
 
 def is_report_verification_command(command):
@@ -546,53 +388,6 @@ def classify_report_verification_result(_text, is_error):
     if is_error:
         return "failure"
     return "success"
-
-
-def timestamp_to_epoch(timestamp):
-    if not timestamp:
-        return None
-    value = str(timestamp)
-    if value.endswith("Z"):
-        value = value[:-1]
-    if "." in value:
-        value = value.split(".", 1)[0]
-    for suffix in ("+00:00", "-00:00"):
-        if value.endswith(suffix):
-            value = value[:-len(suffix)]
-    try:
-        return int((datetime.strptime(value, "%Y-%m-%dT%H:%M:%S") - datetime(1970, 1, 1)).total_seconds())
-    except Exception:
-        return None
-
-
-def duration_metrics(entries):
-    timestamps = []
-    for entry in entries:
-        # Only conversation entries: system entries such as away_summary are
-        # written minutes after the turn ends.
-        if entry.get("type") not in CONVERSATION_TYPES:
-            continue
-        epoch = timestamp_to_epoch(entry.get("timestamp"))
-        if epoch is not None:
-            timestamps.append(epoch)
-    if not timestamps:
-        return {"wall_duration_minutes": 0, "active_duration_minutes": 0, "large_idle_gap_count": 0}
-
-    timestamps.sort()
-    wall = max(0, int(round((timestamps[-1] - timestamps[0]) / 60.0)))
-    active_seconds = 0
-    large_gaps = 0
-    for idx in range(1, len(timestamps)):
-        gap = timestamps[idx] - timestamps[idx - 1]
-        if gap > IDLE_GAP_SECONDS:
-            large_gaps += 1
-        else:
-            active_seconds += max(0, gap)
-    return {
-        "wall_duration_minutes": wall,
-        "active_duration_minutes": int(round(active_seconds / 60.0)),
-        "large_idle_gap_count": large_gaps,
-    }
 
 
 def text_from_content(content):
@@ -725,16 +520,10 @@ def inspect_session(path, targets, session_id_filter=None):
     last_ts = None
     human_users = 0
     assistant_messages = 0
-    agent_calls = 0
-    tools = {}
-
-    for entry in read_jsonl_lenient(path):
+    entries = read_jsonl_lenient(path)
+    for entry in entries:
         if isinstance(entry.get("sessionId"), str):
             session_id = entry.get("sessionId")
-        if entry.get("type") in CONVERSATION_TYPES and isinstance(entry.get("timestamp"), str):
-            if first_ts is None:
-                first_ts = entry.get("timestamp")
-            last_ts = entry.get("timestamp")
         if isinstance(entry.get("cwd"), str):
             if targets is None:
                 if matched_cwd is None:
@@ -743,26 +532,20 @@ def inspect_session(path, targets, session_id_filter=None):
                 if matched_cwd is None:
                     matched_cwd = entry.get("cwd")
 
-        msg_type = entry.get("type")
-        content = entry.get("message", {}).get("content")
-        if msg_type == "user":
-            if entry_has_human_text(entry):
-                human_users += 1
-        elif msg_type == "assistant":
-            assistant_messages += 1
-            if isinstance(content, list):
-                for block in content:
-                    if not isinstance(block, dict) or block.get("type") != "tool_use":
-                        continue
-                    name = str(block.get("name", "unknown"))
-                    tools[name] = tools.get(name, 0) + 1
-                    if name in DELEGATION_TOOLS:
-                        agent_calls += 1
-
     if session_id_filter and not session_id_matches(session_id, session_id_filter):
         return None
     if matched_cwd is None:
         return None
+
+    for entry in select_conversation(entries):
+        if entry.get("type") in CONVERSATION_TYPES and isinstance(entry.get("timestamp"), str):
+            if first_ts is None:
+                first_ts = entry.get("timestamp")
+            last_ts = entry.get("timestamp")
+        if entry_has_human_text(entry):
+            human_users += 1
+        if entry.get("type") == "assistant":
+            assistant_messages += 1
 
     return {
         "file": path,
@@ -772,8 +555,6 @@ def inspect_session(path, targets, session_id_filter=None):
         "last_ts": last_ts or "",
         "human_users": human_users,
         "assistant_messages": assistant_messages,
-        "agent_calls": agent_calls,
-        "tools": sort_counts(tools),
         "mtime": os.path.getmtime(path),
     }
 
@@ -847,7 +628,7 @@ def transcript_active_intervals(entries):
 
 
 def summarize_session(meta, correction_re):
-    entries = read_jsonl_lenient(meta["file"])
+    entries = select_conversation(read_jsonl_lenient(meta["file"]))
     tools = {}
     assistant_models = {}
     files = {}

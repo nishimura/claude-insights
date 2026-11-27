@@ -152,6 +152,8 @@ selection refinement には `index.md` flags を使う:
 - `docs`
 - `implementation`
 
+main session の集計と packet の timeline は、並列 tool call を含む選択済み会話分岐を対象とする。セッション全体の delegation 件数に差がある場合は packet に別記される。
+
 packet の timeline で、人が入力したメッセージ（または subagent への依頼文）は `[User]` 行だけ。`[Task notification]` は subagent の完了通知、`[Agent message]` は他エージェントからのメッセージ、`[System]` 行は Claude Code が差し込んだもの。これらをユーザーのフィードバックとして読まない。
 
 subagent analysis では、`raw_subagent_transcript_count` と `logical_subagent_role_count` を比較する。raw transcripts は file 間で split されることがあり、logical roles は parent delegation labels から来る。

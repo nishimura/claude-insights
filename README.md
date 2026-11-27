@@ -51,8 +51,8 @@ start from a dedicated session when you want a cleaner analysis context.
 
 - Filters Claude Code sessions by execution directory, such as
   `/path/to/project/branch_*`.
-- Reconstructs the latest conversation branch from `uuid` / `parentUuid`,
-  across compactions and parallel tool calls.
+- Uses the latest conversation branch for main-session counts and timelines,
+  including earlier turns across compactions and sibling parallel tool calls.
 - Finds subagent transcripts under each parent session's `subagents/` directory.
 - Writes one Markdown packet per session with:
   - main-session timeline
@@ -89,6 +89,8 @@ claude-insights/
   bin/
     collect-project-packets.py
     build-session-packet.py
+    session_transcript.py
+    verification_commands.py
   data/
     runs/
 ```

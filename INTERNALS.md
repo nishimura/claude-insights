@@ -90,7 +90,11 @@ type checker or build (`phpunit`, `phpstan`, `pytest`, `npm test`, `make check`,
 command that only reads or moves files (`grep`, `sed`, `cat`, `git`, `ls`,
 `find`, ...) never count, so `grep -rn phpunit .` or `sed -n 1,40p
 tests/FooTest.php` are not verification. Heredoc bodies and redirection targets
-are ignored, and `bash -c '...'` is looked into.
+are ignored. The collector and packet builder share the same heuristic. It
+matches recognized commands, script names, and subcommands in their command
+positions, including commands inside shell -c arguments. A tool name in
+arbitrary argument text does not count. Quoted or escaped punctuation stays
+part of its shell word.
 
 Packet sizing metadata is included as `packet_size_bytes`, `packet_line_count`,
 `large_packet`, `very_large_packet`, and `suggested_read_strategy`, so report
@@ -115,6 +119,7 @@ shell commands, notable error/verification tool results, verification outcome
 counts, active duration, model-invocation tool signals, and subagent outcome
 hints.
 
+Main-session metrics and the packet timeline use the same branch selection.
 The timeline follows one branch of the `parentUuid` tree: the branch whose last
 message was written last, as Claude Code picks when it resumes. Older attempts
 that the user rewound or edited are left out. The walk crosses compactions
@@ -126,7 +131,11 @@ calls).
 
 Packets also show the full-session delegation call count and any calls outside
 the selected branch when those counts differ; such calls come from rewound
-attempts. Delegation calls are `Agent`, `Workflow`, and the old `Task` name.
+attempts. Session discovery still matches the cwd recorded anywhere in the
+parent transcript. Subagent aggregates still cover discovered transcript files
+and de-duplicate tool events across files. Each packet shows the selected
+branch of each displayed subagent transcript, so model counts and durations
+can differ from the aggregate. Delegation calls are `Agent`, `Workflow`, and the old `Task` name.
 
 Timeline lines are labeled by who produced them. Only `[User]` lines are text a
 person typed (or a subagent's task prompt). `[Task notification]` is a

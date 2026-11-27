@@ -40,7 +40,12 @@ correctly and whether the previous run followed this skill's workflow.
   - `top_tools` counts vs Main Timeline tool markers.
   - `report_verification_count` vs shell commands that inspect `report.md`.
   - `error_count` vs tool_result blocks with `is_error=true`.
-  - `verification_count` vs build/test/lint commands only.
+  - Main verification counts in the aggregate and packet should agree. Check
+    that rewound attempts are excluded and that command arguments mentioning
+    a test tool are not counted as test runs.
+  - Compare subagent counts and duration using their scope. The aggregate
+    covers discovered transcripts and de-duplicates tool events across files.
+    Packet sections show selected branches and may be clipped.
   - `raw_subagent_transcript_count` and `logical_subagent_role_count`, if present.
 - Confirm `python -c` and Python heredocs were not used for JSON inspection.
 - Confirm `aggregate.json` and `index.md` were read directly.

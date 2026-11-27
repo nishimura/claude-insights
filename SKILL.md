@@ -223,6 +223,10 @@ Use `index.md` flags to refine the selection:
 - `docs`
 - `implementation`
 
+Main-session metrics and packet timelines use the selected conversation
+branch, including parallel tool calls. Packets separately label full-session
+delegation counts when they differ.
+
 In packet timelines, only `[User]` lines are messages a person typed (or a
 subagent's task prompt). `[Task notification]` is a subagent's completion
 notice, `[Agent message]` is a message from another agent, and `[System]`
